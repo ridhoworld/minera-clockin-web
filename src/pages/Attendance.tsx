@@ -1032,11 +1032,11 @@ const reverseGeocode = async (
 
 const exportPDF2 = async (
   formData: {
-  namaKaryawan: string
-  nipJabatan: string
-  bagianDept: string
-  lokasiProyek: string
-}
+    namaKaryawan: string
+    nipJabatan: string
+    bagianDept: string
+    lokasiProyek: string
+  }
 ) => {
   if (filteredAttendances.length === 0) {
     alert('Tidak ada data untuk diexport.')
@@ -1084,6 +1084,7 @@ const exportPDF2 = async (
       col2Width
 
     const col1X = headerX
+
     const col2X =
       col1X + col1Width
 
@@ -1259,6 +1260,7 @@ const exportPDF2 = async (
     // ---------------------------------------------------------
 
     const infoLabelGap = 2
+
     doc.text(
       'Nama Karyawan',
       infoCol1X,
@@ -1267,32 +1269,45 @@ const exportPDF2 = async (
 
     doc.text(
       ':',
-      infoCol1X + 30 + infoLabelGap,
+      infoCol1X +
+        30 +
+        infoLabelGap,
       infoStartY
     )
 
     doc.text(
       formData.namaKaryawan,
-      infoCol1X + 30 + infoLabelGap + 2,
+      infoCol1X +
+        30 +
+        infoLabelGap +
+        2,
       infoStartY
     )
 
     doc.text(
       'NIP / Jabatan',
       infoCol1X,
-      infoStartY + infoRowHeight
+      infoStartY +
+        infoRowHeight
     )
 
     doc.text(
       ':',
-      infoCol1X + 30 + infoLabelGap,
-      infoStartY + infoRowHeight
+      infoCol1X +
+        30 +
+        infoLabelGap,
+      infoStartY +
+        infoRowHeight
     )
 
     doc.text(
       formData.nipJabatan,
-      infoCol1X + 30 + infoLabelGap + 2,
-      infoStartY + infoRowHeight
+      infoCol1X +
+        30 +
+        infoLabelGap +
+        2,
+      infoStartY +
+        infoRowHeight
     )
 
     // ---------------------------------------------------------
@@ -1307,32 +1322,45 @@ const exportPDF2 = async (
 
     doc.text(
       ':',
-      infoCol2X + 30 + infoLabelGap,
+      infoCol2X +
+        30 +
+        infoLabelGap,
       infoStartY
     )
 
     doc.text(
       formData.bagianDept,
-      infoCol2X + 30 + infoLabelGap + 2,
+      infoCol2X +
+        30 +
+        infoLabelGap +
+        2,
       infoStartY
     )
 
     doc.text(
       'Lokasi Proyek',
       infoCol2X,
-      infoStartY + infoRowHeight
+      infoStartY +
+        infoRowHeight
     )
 
     doc.text(
       ':',
-      infoCol2X + 30 + infoLabelGap,
-      infoStartY + infoRowHeight
+      infoCol2X +
+        30 +
+        infoLabelGap,
+      infoStartY +
+        infoRowHeight
     )
 
     doc.text(
       formData.lokasiProyek,
-      infoCol2X + 30 + infoLabelGap + 2,
-      infoStartY + infoRowHeight
+      infoCol2X +
+        30 +
+        infoLabelGap +
+        2,
+      infoStartY +
+        infoRowHeight
     )
 
     // =========================================================
@@ -1340,6 +1368,13 @@ const exportPDF2 = async (
     // =========================================================
 
     const photoCache =
+      new Map<string, string>()
+
+    // =========================================================
+    // CACHE ALAMAT
+    // =========================================================
+
+    const addressCache =
       new Map<string, string>()
 
     // =========================================================
@@ -1386,6 +1421,84 @@ const exportPDF2 = async (
     }
 
     // =========================================================
+    // AMBIL ALAMAT BERDASARKAN LATITUDE & LONGITUDE
+    // =========================================================
+
+    for (
+      const item of filteredAttendances
+    ) {
+      const addressCoordinates = [
+        [
+          item.latitude_in,
+          item.longitude_in,
+        ],
+        [
+          item.latitude_out,
+          item.longitude_out,
+        ],
+      ] as const
+
+      for (
+        const [
+          latitude,
+          longitude,
+        ] of addressCoordinates
+      ) {
+        const coordinates =
+          getCoordinates(
+            latitude,
+            longitude
+          )
+
+        if (!coordinates) {
+          continue
+        }
+
+        const key =
+          `${coordinates.latitude},${coordinates.longitude}`
+
+        // Jangan request alamat yang sama berkali-kali
+        if (
+          !addressCache.has(key)
+        ) {
+          try {
+            const address =
+              await reverseGeocode(
+                coordinates.latitude,
+                coordinates.longitude
+              )
+
+            addressCache.set(
+              key,
+              address ||
+                formatLocation(
+                  latitude,
+                  longitude
+                )
+            )
+          } catch (error) {
+            console.error(
+              'Gagal mengambil alamat:',
+              latitude,
+              longitude,
+              error
+            )
+
+            // Jika reverse geocode gagal,
+            // tampilkan koordinat sebagai fallback
+            addressCache.set(
+              key,
+              formatLocation(
+                latitude,
+                longitude
+              )
+            )
+          }
+        }
+      }
+    }
+
+    // =========================================================
     // FUNGSI FORMAT TANGGAL
     // =========================================================
 
@@ -1402,12 +1515,13 @@ const exportPDF2 = async (
     }
 
     // =========================================================
-    // DATA ROW TABEL
+    // DATA TABEL
     // =========================================================
 
-    const rows =
+    const tableBody =
       filteredAttendances.map(
         (item) => {
+
           const photoIn =
             getPhotoUrl(
               item.photo_in
@@ -1418,10 +1532,75 @@ const exportPDF2 = async (
               item.photo_out
             )
 
+          // ---------------------------------------------------
+          // KOORDINAT ABSEN MASUK
+          // ---------------------------------------------------
+
+          const coordinatesIn =
+            getCoordinates(
+              item.latitude_in,
+              item.longitude_in
+            )
+
+          // ---------------------------------------------------
+          // KOORDINAT ABSEN KELUAR
+          // ---------------------------------------------------
+
+          const coordinatesOut =
+            getCoordinates(
+              item.latitude_out,
+              item.longitude_out
+            )
+
+          // ---------------------------------------------------
+          // ALAMAT ABSEN MASUK
+          // ---------------------------------------------------
+
+          const addressIn =
+            coordinatesIn
+              ? addressCache.get(
+                  `${coordinatesIn.latitude},${coordinatesIn.longitude}`
+                ) ||
+                formatLocation(
+                  item.latitude_in,
+                  item.longitude_in
+                )
+              : '-'
+
+          // ---------------------------------------------------
+          // ALAMAT ABSEN KELUAR
+          // ---------------------------------------------------
+
+          const addressOut =
+            coordinatesOut
+              ? addressCache.get(
+                  `${coordinatesOut.latitude},${coordinatesOut.longitude}`
+                ) ||
+                formatLocation(
+                  item.latitude_out,
+                  item.longitude_out
+                )
+              : '-'
+
+          // ---------------------------------------------------
+          // KETERANGAN
+          //
+          // Baris 1 = lokasi absen masuk
+          // Baris 2 = lokasi absen keluar
+          // Baris 3 = keterangan
+          // ---------------------------------------------------
+
+          const catatan = [
+            `Lokasi Masuk: ${addressIn}`,
+            `Lokasi Keluar: ${addressOut}`,
+            `Keterangan: ${item.notes || '-'}`,
+          ].join('\n')
+
           return [
             // -------------------------------------------------
             // 1. HARI / TANGGAL
             // -------------------------------------------------
+
             formatTanggalPDF(
               item.date
             ),
@@ -1429,42 +1608,26 @@ const exportPDF2 = async (
             // -------------------------------------------------
             // 2. JAM MASUK
             // -------------------------------------------------
+
             item.clock_in || '-',
 
             // -------------------------------------------------
             // 3. JAM PULANG
             // -------------------------------------------------
+
             item.clock_out || '-',
 
             // -------------------------------------------------
             // 4. FOTO MASUK / PULANG
             // -------------------------------------------------
-            {
-              content: '',
-              photoIn:
-                photoIn &&
-                photoCache.has(
-                  photoIn
-                )
-                  ? photoCache.get(
-                      photoIn
-                    )
-                  : null,
-              photoOut:
-                photoOut &&
-                photoCache.has(
-                  photoOut
-                )
-                  ? photoCache.get(
-                      photoOut
-                    )
-                  : null,
-            },
+
+            '',
 
             // -------------------------------------------------
             // 5. CATATAN
             // -------------------------------------------------
-            item.notes || '-',
+
+            catatan,
           ]
         }
       )
@@ -1475,220 +1638,274 @@ const exportPDF2 = async (
 
     const tableStartY =
       infoStartY +
-      infoRowHeight * 2 +
-      6
+      infoRowHeight * 2 - 3
 
     // =========================================================
     // TABEL ABSENSI
     // =========================================================
 
     autoTable(doc, {
-  startY: infoStartY + 7,
+      startY: tableStartY,
 
-  head: [[
-    'Hari / Tanggal',
-    'Jam Masuk',
-    'Jam Pulang',
-    'Foto Masuk / Pulang',
-    'Catatan',
-  ]],
+      head: [[
+        'Hari / Tanggal',
+        'Jam Masuk',
+        'Jam Pulang',
+        'Foto Masuk / Pulang',
+        'Keterangan',
+      ]],
 
-  body: filteredAttendances.map((item) => [
-    formatDate(item.date),
-    item.clock_in || '-',
-    item.clock_out || '-',
-    '',
-    item.notes || '-',
-  ]),
+      body: tableBody,
 
-  theme: 'grid',
+      theme: 'grid',
 
-  tableWidth: headerWidth,
+      tableWidth: headerWidth,
 
-  margin: {
-    left: margin,
-    right: margin,
-  },
+      margin: {
+        left: margin,
+        right: margin,
+      },
 
-  styles: {
-    font: 'helvetica',
-    fontStyle: 'normal',
-    fontSize: 8,
-    textColor: [0, 0, 0],
-    fillColor: [255, 255, 255],
-    cellPadding: 2,
-    valign: 'middle',
-    halign: 'center',
-    overflow: 'linebreak',
-    lineWidth: 0.5,
-    lineColor: [0, 0, 0],
-  },
+      styles: {
+        font: 'helvetica',
+        fontStyle: 'normal',
+        fontSize: 8,
+        textColor: [0, 0, 0],
+        fillColor: [255, 255, 255],
+        cellPadding: 2,
+        valign: 'middle',
+        halign: 'center',
+        overflow: 'linebreak',
+        lineWidth: 0.5,
+        lineColor: [0, 0, 0],
+      },
 
-  headStyles: {
-    font: 'helvetica',
-    fontStyle: 'bold',
-    fontSize: 8.5,
-    textColor: [0, 0, 0],
-    fillColor: [255, 255, 255],
-    cellPadding: 2,
-    halign: 'center',
-    valign: 'middle',
-    lineWidth: 0.5,
-    lineColor: [0, 0, 0],
-  },
+      headStyles: {
+        font: 'helvetica',
+        fontStyle: 'bold',
+        fontSize: 8.5,
+        textColor: [0, 0, 0],
+        fillColor: [255, 255, 255],
+        cellPadding: 2,
+        halign: 'center',
+        valign: 'middle',
+        lineWidth: 0.5,
+        lineColor: [0, 0, 0],
+      },
 
-  columnStyles: {
-    // Total = 190 mm
-    // 10 + 190 = 200, sama persis dengan header
+      columnStyles: {
 
-    0: {
-      cellWidth: 28,
-      halign: 'center',
-    },
+        // Total = 190 mm
 
-    1: {
-      cellWidth: 25,
-      halign: 'center',
-    },
+        0: {
+          cellWidth: 28,
+          halign: 'center',
+        },
 
-    2: {
-      cellWidth: 25,
-      halign: 'center',
-    },
+        1: {
+          cellWidth: 25,
+          halign: 'center',
+        },
 
-    3: {
-      cellWidth: 55,
-      halign: 'center',
-    },
+        2: {
+          cellWidth: 25,
+          halign: 'center',
+        },
 
-    4: {
-      cellWidth: 57,
-      halign: 'center',
-    },
-  },
+        3: {
+          cellWidth: 55,
+          halign: 'center',
+        },
 
-  didParseCell: (data) => {
-    if (data.section === 'body') {
-      data.cell.styles.minCellHeight = 32
-    }
-  },
+        4: {
+          cellWidth: 57,
+          halign: 'left',
+        },
+      },
 
-  didDrawCell: (data) => {
-    if (
-      data.section !== 'body' ||
-      data.column.index !== 3
-    ) {
-      return
-    }
+      // =======================================================
+      // TINGGI BARIS
+      // =======================================================
 
-    const item = filteredAttendances[data.row.index]
-
-    if (!item) return
-
-    const photoIn = getPhotoUrl(item.photo_in)
-    const photoOut = getPhotoUrl(item.photo_out)
-
-    const imageIn = photoIn
-      ? photoCache.get(photoIn)
-      : undefined
-
-    const imageOut = photoOut
-      ? photoCache.get(photoOut)
-      : undefined
-
-    const padding = 1
-    const dividerX =
-      data.cell.x + data.cell.width / 2
-
-    // Garis pemisah Foto IN dan Foto OUT
-    doc.setLineWidth(0.2)
-
-    doc.line(
-      dividerX,
-      data.cell.y,
-      dividerX,
-      data.cell.y + data.cell.height
-    )
-
-    const imageWidth =
-      data.cell.width / 2 - padding * 2
-
-    const imageHeight =
-      data.cell.height - padding * 2
-
-    // FOTO MASUK
-    if (imageIn) {
-      const format = imageIn.startsWith('data:image/png')
-        ? 'PNG'
-        : 'JPEG'
-
-      doc.addImage(
-        imageIn,
-        format,
-        data.cell.x + padding,
-        data.cell.y + padding,
-        imageWidth,
-        imageHeight
-      )
-    } else {
-      doc.setFontSize(7)
-      doc.text(
-        'IN',
-        data.cell.x + data.cell.width / 4,
-        data.cell.y + data.cell.height / 2,
-        {
-          align: 'center',
-          baseline: 'middle',
+      didParseCell: (data) => {
+        if (
+          data.section === 'body'
+        ) {
+          data.cell.styles.minCellHeight = 32
         }
-      )
-    }
+      },
 
-    // FOTO PULANG
-    if (imageOut) {
-      const format = imageOut.startsWith('data:image/png')
-        ? 'PNG'
-        : 'JPEG'
+      // =======================================================
+      // GAMBAR FOTO
+      // =======================================================
 
-      doc.addImage(
-        imageOut,
-        format,
-        dividerX + padding,
-        data.cell.y + padding,
-        imageWidth,
-        imageHeight
-      )
-    } else {
-      doc.setFontSize(7)
-      doc.text(
-        'OUT',
-        dividerX + data.cell.width / 4,
-        data.cell.y + data.cell.height / 2,
-        {
-          align: 'center',
-          baseline: 'middle',
+      didDrawCell: (data) => {
+
+        if (
+          data.section !== 'body' ||
+          data.column.index !== 3
+        ) {
+          return
         }
-      )
-    }
-  },
 
-  didDrawPage: () => {
-    const pageHeight =
-      doc.internal.pageSize.getHeight()
+        const item =
+          filteredAttendances[
+            data.row.index
+          ]
 
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
+        if (!item) return
 
-    doc.setFontSize(7)
+        const photoIn =
+          getPhotoUrl(
+            item.photo_in
+          )
 
-    doc.text(
-      'Minera ClockIn',
-      margin,
-      pageHeight - 8
-    )
-  },
-})
+        const photoOut =
+          getPhotoUrl(
+            item.photo_out
+          )
+
+        const imageIn =
+          photoIn
+            ? photoCache.get(
+                photoIn
+              )
+            : undefined
+
+        const imageOut =
+          photoOut
+            ? photoCache.get(
+                photoOut
+              )
+            : undefined
+
+        const padding = 1
+
+        const dividerX =
+          data.cell.x +
+          data.cell.width / 2
+
+        // -----------------------------------------------------
+        // Garis pemisah FOTO IN dan FOTO OUT
+        // -----------------------------------------------------
+
+        doc.setLineWidth(0.2)
+
+        doc.line(
+          dividerX,
+          data.cell.y,
+          dividerX,
+          data.cell.y +
+            data.cell.height
+        )
+
+        const imageWidth =
+          data.cell.width / 2 -
+          padding * 2
+
+        const imageHeight =
+          data.cell.height -
+          padding * 2
+
+        // -----------------------------------------------------
+        // FOTO MASUK
+        // -----------------------------------------------------
+
+        if (imageIn) {
+          const format =
+            imageIn.startsWith(
+              'data:image/png'
+            )
+              ? 'PNG'
+              : 'JPEG'
+
+          doc.addImage(
+            imageIn,
+            format,
+            data.cell.x +
+              padding,
+            data.cell.y +
+              padding,
+            imageWidth,
+            imageHeight
+          )
+        } else {
+          doc.setFontSize(7)
+
+          doc.text(
+            'IN',
+            data.cell.x +
+              data.cell.width / 4,
+            data.cell.y +
+              data.cell.height / 2,
+            {
+              align: 'center',
+              baseline: 'middle',
+            }
+          )
+        }
+
+        // -----------------------------------------------------
+        // FOTO PULANG
+        // -----------------------------------------------------
+
+        if (imageOut) {
+          const format =
+            imageOut.startsWith(
+              'data:image/png'
+            )
+              ? 'PNG'
+              : 'JPEG'
+
+          doc.addImage(
+            imageOut,
+            format,
+            dividerX +
+              padding,
+            data.cell.y +
+              padding,
+            imageWidth,
+            imageHeight
+          )
+        } else {
+          doc.setFontSize(7)
+
+          doc.text(
+            'OUT',
+            dividerX +
+              data.cell.width / 4,
+            data.cell.y +
+              data.cell.height / 2,
+            {
+              align: 'center',
+              baseline: 'middle',
+            }
+          )
+        }
+      },
+
+      // =======================================================
+      // FOOTER
+      // =======================================================
+
+      didDrawPage: () => {
+        const pageHeight =
+          doc.internal.pageSize.getHeight()
+
+        doc.setFont(
+          'helvetica',
+          'normal'
+        )
+
+        doc.setFontSize(7)
+
+        doc.text(
+          'Minera ClockIn',
+          margin,
+          pageHeight - 8
+        )
+      },
+    })
 
     // =========================================================
     // SIMPAN PDF
@@ -1702,13 +1919,14 @@ const exportPDF2 = async (
     doc.save(filename)
 
   } catch (error) {
+
     console.error(
       'Export PDF error:',
       error
     )
 
     alert(
-      'Gagal membuat PDF. Pastikan foto absensi dapat diakses oleh browser.'
+      'Gagal membuat PDF. Pastikan foto absensi dan alamat lokasi dapat diakses oleh browser.'
     )
   }
 }
