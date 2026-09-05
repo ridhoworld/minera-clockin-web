@@ -1593,7 +1593,7 @@ const exportPDF2 = async (
           const catatan = [
             `Lokasi Masuk: ${addressIn}`,
             `Lokasi Keluar: ${addressOut}`,
-            `Keterangan: ${item.notes || '-'}`,
+            `Catatan: ${item.notes || '-'}`,
           ].join('\n')
 
           return [
@@ -1912,7 +1912,7 @@ const exportPDF2 = async (
     // =========================================================
 
     const filename =
-      `Absensi${new Date()
+      `Absensi-${new Date()
         .toISOString()
         .slice(0, 10)}.pdf`
 
