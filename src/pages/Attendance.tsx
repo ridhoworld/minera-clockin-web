@@ -789,247 +789,247 @@ const reverseGeocode = async (
 // PDF
 // ============================================================
 
+// const exportPDF = async () => {
+//   if (filteredAttendances.length === 0) {
+//     alert('Tidak ada data untuk diexport.')
+//     return
+//   }
 
-const exportPDF = async () => {
-  if (filteredAttendances.length === 0) {
-    alert('Tidak ada data untuk diexport.')
-    return
-  }
+//   try {
+//     const doc = new jsPDF({
+//       orientation: 'landscape',
+//       unit: 'mm',
+//       format: 'a4',
+//     })
 
-  try {
-    const doc = new jsPDF({
-      orientation: 'landscape',
-      unit: 'mm',
-      format: 'a4',
-    })
+//     doc.setFontSize(16)
+//     doc.text('LAPORAN DATA ABSENSI', 8, 12)
 
-    doc.setFontSize(16)
-    doc.text('LAPORAN DATA ABSENSI', 8, 12)
+//     doc.setFontSize(8)
+//     if (startDate || endDate) {
+//       const period =
+//         startDate && endDate
+//           ? `Periode: ${formatDate(startDate)} s/d ${formatDate(endDate)}`
+//           : startDate
+//             ? `Periode: mulai ${formatDate(startDate)}`
+//             : `Periode: sampai ${formatDate(endDate)}`
+//       doc.text(period, 8, 18)
+//     }
+//     doc.text(
+//       `Jumlah data: ${filteredAttendances.length}`,
+//       8,
+//       startDate || endDate ? 24 : 18
+//     )
 
-    doc.setFontSize(8)
-    if (startDate || endDate) {
-      const period =
-        startDate && endDate
-          ? `Periode: ${formatDate(startDate)} s/d ${formatDate(endDate)}`
-          : startDate
-            ? `Periode: mulai ${formatDate(startDate)}`
-            : `Periode: sampai ${formatDate(endDate)}`
-      doc.text(period, 8, 18)
-    }
-    doc.text(
-      `Jumlah data: ${filteredAttendances.length}`,
-      8,
-      startDate || endDate ? 24 : 18
-    )
+//     const photoCache = new Map<string, string>()
+//     const addressCache = new Map<string, string>()
 
-    const photoCache = new Map<string, string>()
-    const addressCache = new Map<string, string>()
+//     for (const item of filteredAttendances) {
+//       const photoUrls = [
+//         getPhotoUrl(item.photo_in),
+//         getPhotoUrl(item.photo_out),
+//       ]
 
-    for (const item of filteredAttendances) {
-      const photoUrls = [
-        getPhotoUrl(item.photo_in),
-        getPhotoUrl(item.photo_out),
-      ]
+//       for (const photoUrl of photoUrls) {
+//         if (photoUrl && !photoCache.has(photoUrl)) {
+//           const dataUrl =
+//             photoUrl.startsWith('data:image/')
+//               ? photoUrl
+//               : await imageToDataUrl(photoUrl)
 
-      for (const photoUrl of photoUrls) {
-        if (photoUrl && !photoCache.has(photoUrl)) {
-          const dataUrl =
-            photoUrl.startsWith('data:image/')
-              ? photoUrl
-              : await imageToDataUrl(photoUrl)
+//           if (dataUrl) {
+//             photoCache.set(photoUrl, dataUrl)
+//           } else {
+//             console.error(
+//               'Foto gagal dimuat untuk PDF:',
+//               photoUrl
+//             )
+//           }
+//         }
+//       }
 
-          if (dataUrl) {
-            photoCache.set(photoUrl, dataUrl)
-          } else {
-            console.error(
-              'Foto gagal dimuat untuk PDF:',
-              photoUrl
-            )
-          }
-        }
-      }
+//       const addressCoordinates = [
+//         [item.latitude_in, item.longitude_in],
+//         [item.latitude_out, item.longitude_out],
+//       ] as const
 
-      const addressCoordinates = [
-        [item.latitude_in, item.longitude_in],
-        [item.latitude_out, item.longitude_out],
-      ] as const
+//       for (const [latitude, longitude] of addressCoordinates) {
+//         const coordinates = getCoordinates(latitude, longitude)
+//         if (!coordinates) continue
 
-      for (const [latitude, longitude] of addressCoordinates) {
-        const coordinates = getCoordinates(latitude, longitude)
-        if (!coordinates) continue
+//         const key = `${coordinates.latitude},${coordinates.longitude}`
+//         if (!addressCache.has(key)) {
+//           addressCache.set(
+//             key,
+//             await reverseGeocode(latitude, longitude)
+//           )
+//         }
+//       }
+//     }
 
-        const key = `${coordinates.latitude},${coordinates.longitude}`
-        if (!addressCache.has(key)) {
-          addressCache.set(
-            key,
-            await reverseGeocode(latitude, longitude)
-          )
-        }
-      }
-    }
+//     const rows = filteredAttendances.map((item, index) => {
+//       const photoIn = getPhotoUrl(item.photo_in)
+//       const photoOut = getPhotoUrl(item.photo_out)
+//       const coordinatesIn = getCoordinates(
+//         item.latitude_in,
+//         item.longitude_in
+//       )
+//       const coordinatesOut = getCoordinates(
+//         item.latitude_out,
+//         item.longitude_out
+//       )
+//       const addressIn = coordinatesIn
+//         ? addressCache.get(
+//             `${coordinatesIn.latitude},${coordinatesIn.longitude}`
+//           ) || formatLocation(
+//             item.latitude_in,
+//             item.longitude_in
+//           )
+//         : '-'
+//       const addressOut = coordinatesOut
+//         ? addressCache.get(
+//             `${coordinatesOut.latitude},${coordinatesOut.longitude}`
+//           ) || formatLocation(
+//             item.latitude_out,
+//             item.longitude_out
+//           )
+//         : '-'
 
-    const rows = filteredAttendances.map((item, index) => {
-      const photoIn = getPhotoUrl(item.photo_in)
-      const photoOut = getPhotoUrl(item.photo_out)
-      const coordinatesIn = getCoordinates(
-        item.latitude_in,
-        item.longitude_in
-      )
-      const coordinatesOut = getCoordinates(
-        item.latitude_out,
-        item.longitude_out
-      )
-      const addressIn = coordinatesIn
-        ? addressCache.get(
-            `${coordinatesIn.latitude},${coordinatesIn.longitude}`
-          ) || formatLocation(
-            item.latitude_in,
-            item.longitude_in
-          )
-        : '-'
-      const addressOut = coordinatesOut
-        ? addressCache.get(
-            `${coordinatesOut.latitude},${coordinatesOut.longitude}`
-          ) || formatLocation(
-            item.latitude_out,
-            item.longitude_out
-          )
-        : '-'
+//       return [
+//         index + 1,
+//         item.user?.name || '-',
+//         formatDate(item.date),
+//         item.clock_in || '-',
+//         photoIn && photoCache.has(photoIn) ? 'Ada' : '-',
+//         formatLocation(item.latitude_in, item.longitude_in),
+//         addressIn,
+//         item.clock_out || '-',
+//         photoOut && photoCache.has(photoOut) ? 'Ada' : '-',
+//         formatLocation(item.latitude_out, item.longitude_out),
+//         addressOut,
+//         formatDuration(item.work_duration),
+//         formatStatus(item.status),
+//         item.is_late
+//           ? `${item.late_duration} menit`
+//           : 'Tidak',
+//         item.notes || '-',
+//       ]
+//     })
 
-      return [
-        index + 1,
-        item.user?.name || '-',
-        formatDate(item.date),
-        item.clock_in || '-',
-        photoIn && photoCache.has(photoIn) ? 'Ada' : '-',
-        formatLocation(item.latitude_in, item.longitude_in),
-        addressIn,
-        item.clock_out || '-',
-        photoOut && photoCache.has(photoOut) ? 'Ada' : '-',
-        formatLocation(item.latitude_out, item.longitude_out),
-        addressOut,
-        formatDuration(item.work_duration),
-        formatStatus(item.status),
-        item.is_late
-          ? `${item.late_duration} menit`
-          : 'Tidak',
-        item.notes || '-',
-      ]
-    })
+//     autoTable(doc, {
+//       startY: startDate || endDate ? 29 : 23,
+//       head: [[
+//         'No',
+//         'Nama',
+//         'Tanggal',
+//         'Clock In',
+//         'Foto In',
+//         'Lokasi In',
+//         'Alamat In',
+//         'Clock Out',
+//         'Foto Out',
+//         'Lokasi Out',
+//         'Alamat Out',
+//         'Durasi',
+//         'Status',
+//         'Terlambat',
+//         'Catatan',
+//       ]],
+//       body: rows,
+//       styles: {
+//        fontSize: 5.5,
+//        cellPadding: 1.5,
+//         valign: 'middle',
+//        overflow: 'linebreak',
+//      },
+//      headStyles: {
+//        fontSize: 5.5,
+//        cellPadding: 1.5,
+//      },
+//      columnStyles: {
+//        0: { cellWidth: 8 },
+//        1: { cellWidth: 19 },
+//        2: { cellWidth: 17 },
+//        3: { cellWidth: 17 },
+//        4: { cellWidth: 22 },
+//        5: { cellWidth: 22 },
+//        6: { cellWidth: 17 },
+//        7: { cellWidth: 22 },
+//        8: { cellWidth: 22 },
+//        9: { cellWidth: 17 },
+//        10: { cellWidth: 17 },
+//        11: { cellWidth: 17 },
+//        12: { cellWidth: 17 },
+//        13: { cellWidth: 17 },
+//        14: { cellWidth: 25 },
+//      },
+//      margin: {
+//        left: 8,
+//        right: 8,
+//      },
+//      didParseCell: (data) => {
+//        if (data.section === 'body') {
+//          data.cell.styles.minCellHeight = 34
+//        }
+//      },
+//      didDrawCell: (data) => {
+//        if (
+//          data.section !== 'body' ||
+//          (data.column.index !== 4 &&
+//            data.column.index !== 8)
+//        ) {
+//          return
+//        }
 
-    autoTable(doc, {
-      startY: startDate || endDate ? 29 : 23,
-      head: [[
-        'No',
-        'Nama',
-        'Tanggal',
-        'Clock In',
-        'Foto In',
-        'Lokasi In',
-        'Alamat In',
-        'Clock Out',
-        'Foto Out',
-        'Lokasi Out',
-        'Alamat Out',
-        'Durasi',
-        'Status',
-        'Terlambat',
-        'Catatan',
-      ]],
-      body: rows,
-      styles: {
-       fontSize: 5.5,
-       cellPadding: 1.5,
-        valign: 'middle',
-       overflow: 'linebreak',
-     },
-     headStyles: {
-       fontSize: 5.5,
-       cellPadding: 1.5,
-     },
-     columnStyles: {
-       0: { cellWidth: 8 },
-       1: { cellWidth: 19 },
-       2: { cellWidth: 17 },
-       3: { cellWidth: 17 },
-       4: { cellWidth: 22 },
-       5: { cellWidth: 22 },
-       6: { cellWidth: 17 },
-       7: { cellWidth: 22 },
-       8: { cellWidth: 22 },
-       9: { cellWidth: 17 },
-       10: { cellWidth: 17 },
-       11: { cellWidth: 17 },
-       12: { cellWidth: 17 },
-       13: { cellWidth: 17 },
-       14: { cellWidth: 25 },
-     },
-     margin: {
-       left: 8,
-       right: 8,
-     },
-     didParseCell: (data) => {
-       if (data.section === 'body') {
-         data.cell.styles.minCellHeight = 34
-       }
-     },
-     didDrawCell: (data) => {
-       if (
-         data.section !== 'body' ||
-         (data.column.index !== 4 &&
-           data.column.index !== 8)
-       ) {
-         return
-       }
+//        const item = filteredAttendances[data.row.index]
+//        if (!item) return
 
-       const item = filteredAttendances[data.row.index]
-       if (!item) return
+//        const image = photoCache.get(
+//          getPhotoUrl(
+//            data.column.index === 4
+//              ? item.photo_in
+//              : item.photo_out
+//          ) || ''
+//        )
 
-       const image = photoCache.get(
-         getPhotoUrl(
-           data.column.index === 4
-             ? item.photo_in
-             : item.photo_out
-         ) || ''
-       )
+//        if (image) {
+//          doc.addImage(
+//            image,
+//            image.startsWith('data:image/png')
+//              ? 'PNG'
+//              : 'JPEG',
+//            data.cell.x + 1,
+//            data.cell.y + 1,
+//            data.cell.width - 2,
+//            data.cell.height - 2
+//          )
+//        }
+//      },
+//      didDrawPage: () => {
+//        doc.setFontSize(6)
+//        doc.text('Minera ClockIn', 8, 202)
+//      },
+//    })
 
-       if (image) {
-         doc.addImage(
-           image,
-           image.startsWith('data:image/png')
-             ? 'PNG'
-             : 'JPEG',
-           data.cell.x + 1,
-           data.cell.y + 1,
-           data.cell.width - 2,
-           data.cell.height - 2
-         )
-       }
-     },
-     didDrawPage: () => {
-       doc.setFontSize(6)
-       doc.text('Minera ClockIn', 8, 202)
-     },
-   })
+//     const filename =
+//       `data-absensi-${new Date()
+//         .toISOString()
+//         .slice(0, 10)}.pdf`
 
-    const filename =
-      `data-absensi-${new Date()
-        .toISOString()
-        .slice(0, 10)}.pdf`
+//     doc.save(filename)
 
-    doc.save(filename)
+//   } catch (error) {
+//     console.error(
+//       'Export PDF error:',
+//       error,
+//     )
 
-  } catch (error) {
-    console.error(
-      'Export PDF error:',
-      error,
-    )
+//     alert(
+//       'Gagal membuat PDF. Pastikan foto absensi dapat diakses oleh browser.',
+//     )
+//   }
+// }
 
-    alert(
-      'Gagal membuat PDF. Pastikan foto absensi dapat diakses oleh browser.',
-    )
-  }
-}
 const exportPDF2 = async (
   formData: {
   namaKaryawan: string
@@ -1791,6 +1791,14 @@ const exportPDF2 = async (
             </button>
 
             <button
+            type="button"
+            onClick={() => navigate('/users')}
+            className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900"
+          >
+            👥 Kelola User
+          </button>
+
+            <button
               type="button"
               onClick={loadAttendances}
               className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
@@ -1808,13 +1816,6 @@ const exportPDF2 = async (
 
             <button
               type="button"
-              onClick={exportPDF}
-              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
-            >
-              📄 PDF
-            </button>
-            <button
-              type="button"
               onClick={() => {
                 if (filteredAttendances.length === 0) {
                   alert('Tidak ada data untuk diexport.')
@@ -1825,7 +1826,7 @@ const exportPDF2 = async (
               }}
               className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
             >
-              📄 PDF2
+              📄 PDF
             </button>
 
           </div>

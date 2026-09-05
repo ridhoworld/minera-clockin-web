@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom'
 
 import Login from './pages/Login'
 import Attendance from './pages/Attendance'
+import UserManagement from './pages/UserManagement'
 
 function ProtectedRoute({
   children,
@@ -39,10 +40,9 @@ function App() {
         element={<Navigate to="/attendance" replace />}
       />
 
-      {/* URL tidak ditemukan */}
       <Route
-        path="*"
-        element={<Navigate to="/attendance" replace />}
+        path="/users"
+        element={<UserManagement />}
       />
     </Routes>
   )
