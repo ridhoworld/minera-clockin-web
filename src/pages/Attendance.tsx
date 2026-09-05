@@ -5,6 +5,8 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import * as XLSX from 'xlsx'
 import { useNavigate } from 'react-router-dom'
+import logo from '../assets/minera.png'
+
 
 import {
   MapContainer,
@@ -34,6 +36,7 @@ L.Icon.Default.mergeOptions({
   shadowUrl:
     'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
 })
+
 
 // ============================================================
 // INTERFACE
@@ -178,6 +181,15 @@ export default function Attendance() {
   const [attendances, setAttendances] = useState<
     AttendanceData[]
   >([])
+  const [showPDF2Form, setShowPDF2Form] = useState(false)
+
+
+  const [pdf2Form, setPdf2Form] = useState({
+    namaKaryawan: '',
+    nipJabatan: '',
+    bagianDept: '',
+    lokasiProyek: 'PT. Sumiraya Sinergi Ananta',
+  })
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -684,6 +696,88 @@ const imageToDataUrl = async (
   }
 }
 
+const reverseGeocode = async (
+  latitude: string | number | null,
+  longitude: string | number | null
+): Promise<string> => {
+  const coordinates = getCoordinates(latitude, longitude)
+
+  if (!coordinates) return '-'
+
+  const geocodingUrl =
+    import.meta.env.VITE_GEOCODING_URL
+
+  if (!geocodingUrl) {
+    return formatLocation(latitude, longitude)
+  }
+
+  try {
+    const params = new URLSearchParams({
+      format: 'jsonv2',
+      lat: String(coordinates.latitude),
+      lon: String(coordinates.longitude),
+      addressdetails: '1',
+      zoom: '18',
+      'accept-language': 'id',
+    })
+    const response = await fetch(
+      `${geocodingUrl}?${params.toString()}`,
+      {
+        headers: {
+          Accept: 'application/json',
+        },
+      }
+    )
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}`)
+    }
+
+    const result = (await response.json()) as {
+      display_name?: string
+      address?: Record<string, string | undefined>
+    }
+
+    const address = result.address
+    const addressParts = address
+      ? [
+          address.road,
+          address.house_number,
+          address.hamlet,
+          address.neighbourhood,
+          address.village ||
+            address.suburb ||
+            address.quarter,
+          address.town ||
+            address.city_district ||
+            address.district,
+          address.city ||
+            address.municipality ||
+            address.county,
+          address.state,
+          address.postcode,
+          address.country,
+        ].filter(
+          (part): part is string =>
+            Boolean(part && part.trim())
+        )
+      : []
+
+    return (
+      addressParts.join(', ') ||
+      result.display_name ||
+      formatLocation(latitude, longitude)
+    )
+  } catch (error) {
+    console.error(
+      'Gagal mengubah koordinat menjadi alamat:',
+      coordinates,
+      error
+    )
+    return formatLocation(latitude, longitude)
+  }
+}
+
 // ============================================================
 // IMAGE TO DATA URL
 // ============================================================
@@ -706,13 +800,13 @@ const exportPDF = async () => {
     const doc = new jsPDF({
       orientation: 'landscape',
       unit: 'mm',
-      format: 'a3',
+      format: 'a4',
     })
 
-    doc.setFontSize(20)
-    doc.text('LAPORAN DATA ABSENSI', 15, 18)
+    doc.setFontSize(16)
+    doc.text('LAPORAN DATA ABSENSI', 8, 12)
 
-    doc.setFontSize(10)
+    doc.setFontSize(8)
     if (startDate || endDate) {
       const period =
         startDate && endDate
@@ -720,15 +814,16 @@ const exportPDF = async () => {
           : startDate
             ? `Periode: mulai ${formatDate(startDate)}`
             : `Periode: sampai ${formatDate(endDate)}`
-      doc.text(period, 15, 25)
+      doc.text(period, 8, 18)
     }
     doc.text(
       `Jumlah data: ${filteredAttendances.length}`,
-      15,
-      startDate || endDate ? 31 : 25
+      8,
+      startDate || endDate ? 24 : 18
     )
 
     const photoCache = new Map<string, string>()
+    const addressCache = new Map<string, string>()
 
     for (const item of filteredAttendances) {
       const photoUrls = [
@@ -753,11 +848,53 @@ const exportPDF = async () => {
           }
         }
       }
+
+      const addressCoordinates = [
+        [item.latitude_in, item.longitude_in],
+        [item.latitude_out, item.longitude_out],
+      ] as const
+
+      for (const [latitude, longitude] of addressCoordinates) {
+        const coordinates = getCoordinates(latitude, longitude)
+        if (!coordinates) continue
+
+        const key = `${coordinates.latitude},${coordinates.longitude}`
+        if (!addressCache.has(key)) {
+          addressCache.set(
+            key,
+            await reverseGeocode(latitude, longitude)
+          )
+        }
+      }
     }
 
     const rows = filteredAttendances.map((item, index) => {
       const photoIn = getPhotoUrl(item.photo_in)
       const photoOut = getPhotoUrl(item.photo_out)
+      const coordinatesIn = getCoordinates(
+        item.latitude_in,
+        item.longitude_in
+      )
+      const coordinatesOut = getCoordinates(
+        item.latitude_out,
+        item.longitude_out
+      )
+      const addressIn = coordinatesIn
+        ? addressCache.get(
+            `${coordinatesIn.latitude},${coordinatesIn.longitude}`
+          ) || formatLocation(
+            item.latitude_in,
+            item.longitude_in
+          )
+        : '-'
+      const addressOut = coordinatesOut
+        ? addressCache.get(
+            `${coordinatesOut.latitude},${coordinatesOut.longitude}`
+          ) || formatLocation(
+            item.latitude_out,
+            item.longitude_out
+          )
+        : '-'
 
       return [
         index + 1,
@@ -766,9 +903,11 @@ const exportPDF = async () => {
         item.clock_in || '-',
         photoIn && photoCache.has(photoIn) ? 'Ada' : '-',
         formatLocation(item.latitude_in, item.longitude_in),
+        addressIn,
         item.clock_out || '-',
         photoOut && photoCache.has(photoOut) ? 'Ada' : '-',
         formatLocation(item.latitude_out, item.longitude_out),
+        addressOut,
         formatDuration(item.work_duration),
         formatStatus(item.status),
         item.is_late
@@ -779,7 +918,7 @@ const exportPDF = async () => {
     })
 
     autoTable(doc, {
-      startY: startDate || endDate ? 38 : 32,
+      startY: startDate || endDate ? 29 : 23,
       head: [[
         'No',
         'Nama',
@@ -787,9 +926,11 @@ const exportPDF = async () => {
         'Clock In',
         'Foto In',
         'Lokasi In',
+        'Alamat In',
         'Clock Out',
         'Foto Out',
         'Lokasi Out',
+        'Alamat Out',
         'Durasi',
         'Status',
         'Terlambat',
@@ -797,42 +938,46 @@ const exportPDF = async () => {
       ]],
       body: rows,
       styles: {
-        fontSize: 7,
-        cellPadding: 3,
+       fontSize: 5.5,
+       cellPadding: 1.5,
         valign: 'middle',
-      },
-      headStyles: {
-        fontSize: 7,
-      },
-      columnStyles: {
-        0: { cellWidth: 12 },
-        1: { cellWidth: 35 },
-        2: { cellWidth: 27 },
-        3: { cellWidth: 27 },
-        4: { cellWidth: 40 },
-        5: { cellWidth: 45 },
-        6: { cellWidth: 27 },
-        7: { cellWidth: 40 },
-        8: { cellWidth: 45 },
-        9: { cellWidth: 27 },
-        10: { cellWidth: 30 },
-        11: { cellWidth: 27 },
-        12: { cellWidth: 45 },
-      },
-      margin: {
-        left: 15,
-        right: 15,
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body') {
-         data.cell.styles.minCellHeight = 52
+       overflow: 'linebreak',
+     },
+     headStyles: {
+       fontSize: 5.5,
+       cellPadding: 1.5,
+     },
+     columnStyles: {
+       0: { cellWidth: 8 },
+       1: { cellWidth: 19 },
+       2: { cellWidth: 17 },
+       3: { cellWidth: 17 },
+       4: { cellWidth: 22 },
+       5: { cellWidth: 22 },
+       6: { cellWidth: 17 },
+       7: { cellWidth: 22 },
+       8: { cellWidth: 22 },
+       9: { cellWidth: 17 },
+       10: { cellWidth: 17 },
+       11: { cellWidth: 17 },
+       12: { cellWidth: 17 },
+       13: { cellWidth: 17 },
+       14: { cellWidth: 25 },
+     },
+     margin: {
+       left: 8,
+       right: 8,
+     },
+     didParseCell: (data) => {
+       if (data.section === 'body') {
+         data.cell.styles.minCellHeight = 34
        }
      },
      didDrawCell: (data) => {
        if (
          data.section !== 'body' ||
          (data.column.index !== 4 &&
-           data.column.index !== 7)
+           data.column.index !== 8)
        ) {
          return
        }
@@ -854,16 +999,16 @@ const exportPDF = async () => {
            image.startsWith('data:image/png')
              ? 'PNG'
              : 'JPEG',
-           data.cell.x + 2,
-           data.cell.y + 3,
-           data.cell.width - 4,
-           data.cell.height - 6
+           data.cell.x + 1,
+           data.cell.y + 1,
+           data.cell.width - 2,
+           data.cell.height - 2
          )
        }
      },
      didDrawPage: () => {
-       doc.setFontSize(8)
-       doc.text('Minera ClockIn', 15, 205)
+       doc.setFontSize(6)
+       doc.text('Minera ClockIn', 8, 202)
      },
    })
 
@@ -885,7 +1030,688 @@ const exportPDF = async () => {
     )
   }
 }
+const exportPDF2 = async (
+  formData: {
+  namaKaryawan: string
+  nipJabatan: string
+  bagianDept: string
+  lokasiProyek: string
+}
+) => {
+  if (filteredAttendances.length === 0) {
+    alert('Tidak ada data untuk diexport.')
+    return
+  }
 
+  try {
+    const doc = new jsPDF({
+      orientation: 'portrait',
+      unit: 'mm',
+      format: 'a4',
+    })
+
+    // =========================================================
+    // UKURAN HALAMAN
+    // =========================================================
+
+    const pageWidth =
+      doc.internal.pageSize.getWidth()
+
+    const margin = 10
+
+    const headerX = margin
+    const headerY = 10
+
+    const headerWidth =
+      pageWidth - margin * 2
+
+    // =========================================================
+    // HEADER
+    // =========================================================
+
+    const headerHeight = 20
+
+    // =========================================================
+    // LEBAR 3 KOLOM HEADER
+    // =========================================================
+
+    const col1Width = 30
+    const col2Width = 114
+
+    const col3Width =
+      headerWidth -
+      col1Width -
+      col2Width
+
+    const col1X = headerX
+    const col2X =
+      col1X + col1Width
+
+    const col3X =
+      col2X + col2Width
+
+    // =========================================================
+    // HEADER - 3 KOLOM
+    // =========================================================
+
+    doc.setLineWidth(0.4)
+
+    // ---------------------------------------------------------
+    // Kolom 1 - Logo
+    // ---------------------------------------------------------
+
+    doc.rect(
+      col1X,
+      headerY,
+      col1Width,
+      headerHeight
+    )
+
+    // ---------------------------------------------------------
+    // Kolom 2 - Judul
+    // ---------------------------------------------------------
+
+    doc.rect(
+      col2X,
+      headerY,
+      col2Width,
+      headerHeight
+    )
+
+    // ---------------------------------------------------------
+    // Kolom 3 - Informasi Dokumen
+    // ---------------------------------------------------------
+
+    doc.rect(
+      col3X,
+      headerY,
+      col3Width,
+      headerHeight
+    )
+
+    // =========================================================
+    // LOGO PERUSAHAAN
+    // =========================================================
+
+    const logoDataUrl =
+      await imageToDataUrl(logo)
+
+    if (logoDataUrl) {
+      const logoWidth = 18
+      const logoHeight = 18
+
+      const imageFormat =
+        logoDataUrl.startsWith(
+          'data:image/png'
+        )
+          ? 'PNG'
+          : 'JPEG'
+
+      doc.addImage(
+        logoDataUrl,
+        imageFormat,
+        col1X +
+          (col1Width - logoWidth) / 2,
+        headerY +
+          (headerHeight - logoHeight) / 2,
+        logoWidth,
+        logoHeight
+      )
+    }
+
+    // =========================================================
+    // KOLOM 2 - JUDUL
+    // =========================================================
+
+    doc.setFont(
+      'helvetica',
+      'bold'
+    )
+
+    doc.setFontSize(14)
+
+    doc.text(
+      'ABSENSI KARYAWAN STANDBY / DINAS',
+      col2X +
+        col2Width / 2,
+      headerY +
+        headerHeight / 2 +
+        1,
+      {
+        align: 'center',
+        baseline: 'middle',
+      }
+    )
+
+    // =========================================================
+    // KOLOM 3 - INFORMASI DOKUMEN
+    // =========================================================
+
+    const rowHeight =
+      headerHeight / 3
+
+    doc.setFont(
+      'helvetica',
+      'normal'
+    )
+
+    doc.setFontSize(9)
+
+    // Row 1
+    doc.text(
+      'No. Form :',
+      col3X + 2,
+      headerY +
+        rowHeight / 2 +
+        1
+    )
+
+    // Row 2
+    doc.text(
+      'No. Revisi :',
+      col3X + 2,
+      headerY +
+        rowHeight +
+        rowHeight / 2 +
+        1
+    )
+
+    // Row 3
+    doc.text(
+      'Tgl Berlaku :',
+      col3X + 2,
+      headerY +
+        rowHeight * 2 +
+        rowHeight / 2 +
+        1
+    )
+
+    // =========================================================
+    // INFORMASI KARYAWAN
+    // 2 KOLOM - TANPA BORDER
+    // =========================================================
+
+    const infoStartY =
+      headerY +
+      headerHeight +
+      4
+
+    const infoColWidth =
+      headerWidth / 2
+
+    const infoCol1X = margin
+
+    const infoCol2X =
+      margin +
+      infoColWidth
+
+    const infoRowHeight = 5
+
+    doc.setFont(
+      'helvetica',
+      'normal'
+    )
+
+    doc.setFontSize(9)
+
+    // ---------------------------------------------------------
+    // KOLOM KIRI
+    // ---------------------------------------------------------
+
+    const infoLabelGap = 2
+    doc.text(
+      'Nama Karyawan',
+      infoCol1X,
+      infoStartY
+    )
+
+    doc.text(
+      ':',
+      infoCol1X + 30 + infoLabelGap,
+      infoStartY
+    )
+
+    doc.text(
+      formData.namaKaryawan,
+      infoCol1X + 30 + infoLabelGap + 2,
+      infoStartY
+    )
+
+    doc.text(
+      'NIP / Jabatan',
+      infoCol1X,
+      infoStartY + infoRowHeight
+    )
+
+    doc.text(
+      ':',
+      infoCol1X + 30 + infoLabelGap,
+      infoStartY + infoRowHeight
+    )
+
+    doc.text(
+      formData.nipJabatan,
+      infoCol1X + 30 + infoLabelGap + 2,
+      infoStartY + infoRowHeight
+    )
+
+    // ---------------------------------------------------------
+    // KOLOM KANAN
+    // ---------------------------------------------------------
+
+    doc.text(
+      'Bagian / Dept',
+      infoCol2X,
+      infoStartY
+    )
+
+    doc.text(
+      ':',
+      infoCol2X + 30 + infoLabelGap,
+      infoStartY
+    )
+
+    doc.text(
+      formData.bagianDept,
+      infoCol2X + 30 + infoLabelGap + 2,
+      infoStartY
+    )
+
+    doc.text(
+      'Lokasi Proyek',
+      infoCol2X,
+      infoStartY + infoRowHeight
+    )
+
+    doc.text(
+      ':',
+      infoCol2X + 30 + infoLabelGap,
+      infoStartY + infoRowHeight
+    )
+
+    doc.text(
+      formData.lokasiProyek,
+      infoCol2X + 30 + infoLabelGap + 2,
+      infoStartY + infoRowHeight
+    )
+
+    // =========================================================
+    // CACHE FOTO
+    // =========================================================
+
+    const photoCache =
+      new Map<string, string>()
+
+    // =========================================================
+    // AMBIL FOTO DARI filteredAttendances
+    // =========================================================
+
+    for (
+      const item of filteredAttendances
+    ) {
+      const photoUrls = [
+        getPhotoUrl(item.photo_in),
+        getPhotoUrl(item.photo_out),
+      ]
+
+      for (
+        const photoUrl of photoUrls
+      ) {
+        if (
+          photoUrl &&
+          !photoCache.has(photoUrl)
+        ) {
+          const dataUrl =
+            photoUrl.startsWith(
+              'data:image/'
+            )
+              ? photoUrl
+              : await imageToDataUrl(
+                  photoUrl
+                )
+
+          if (dataUrl) {
+            photoCache.set(
+              photoUrl,
+              dataUrl
+            )
+          } else {
+            console.error(
+              'Foto gagal dimuat untuk PDF:',
+              photoUrl
+            )
+          }
+        }
+      }
+    }
+
+    // =========================================================
+    // FUNGSI FORMAT TANGGAL
+    // =========================================================
+
+    const formatTanggalPDF = (
+      value: any
+    ) => {
+      if (!value) return '-'
+
+      try {
+        return formatDate(value)
+      } catch {
+        return String(value)
+      }
+    }
+
+    // =========================================================
+    // DATA ROW TABEL
+    // =========================================================
+
+    const rows =
+      filteredAttendances.map(
+        (item) => {
+          const photoIn =
+            getPhotoUrl(
+              item.photo_in
+            )
+
+          const photoOut =
+            getPhotoUrl(
+              item.photo_out
+            )
+
+          return [
+            // -------------------------------------------------
+            // 1. HARI / TANGGAL
+            // -------------------------------------------------
+            formatTanggalPDF(
+              item.date
+            ),
+
+            // -------------------------------------------------
+            // 2. JAM MASUK
+            // -------------------------------------------------
+            item.clock_in || '-',
+
+            // -------------------------------------------------
+            // 3. JAM PULANG
+            // -------------------------------------------------
+            item.clock_out || '-',
+
+            // -------------------------------------------------
+            // 4. FOTO MASUK / PULANG
+            // -------------------------------------------------
+            {
+              content: '',
+              photoIn:
+                photoIn &&
+                photoCache.has(
+                  photoIn
+                )
+                  ? photoCache.get(
+                      photoIn
+                    )
+                  : null,
+              photoOut:
+                photoOut &&
+                photoCache.has(
+                  photoOut
+                )
+                  ? photoCache.get(
+                      photoOut
+                    )
+                  : null,
+            },
+
+            // -------------------------------------------------
+            // 5. CATATAN
+            // -------------------------------------------------
+            item.notes || '-',
+          ]
+        }
+      )
+
+    // =========================================================
+    // POSISI TABEL
+    // =========================================================
+
+    const tableStartY =
+      infoStartY +
+      infoRowHeight * 2 +
+      6
+
+    // =========================================================
+    // TABEL ABSENSI
+    // =========================================================
+
+    autoTable(doc, {
+  startY: infoStartY + 7,
+
+  head: [[
+    'Hari / Tanggal',
+    'Jam Masuk',
+    'Jam Pulang',
+    'Foto Masuk / Pulang',
+    'Catatan',
+  ]],
+
+  body: filteredAttendances.map((item) => [
+    formatDate(item.date),
+    item.clock_in || '-',
+    item.clock_out || '-',
+    '',
+    item.notes || '-',
+  ]),
+
+  theme: 'grid',
+
+  tableWidth: headerWidth,
+
+  margin: {
+    left: margin,
+    right: margin,
+  },
+
+  styles: {
+    font: 'helvetica',
+    fontStyle: 'normal',
+    fontSize: 8,
+    textColor: [0, 0, 0],
+    fillColor: [255, 255, 255],
+    cellPadding: 2,
+    valign: 'middle',
+    halign: 'center',
+    overflow: 'linebreak',
+    lineWidth: 0.5,
+    lineColor: [0, 0, 0],
+  },
+
+  headStyles: {
+    font: 'helvetica',
+    fontStyle: 'bold',
+    fontSize: 8.5,
+    textColor: [0, 0, 0],
+    fillColor: [255, 255, 255],
+    cellPadding: 2,
+    halign: 'center',
+    valign: 'middle',
+    lineWidth: 0.5,
+    lineColor: [0, 0, 0],
+  },
+
+  columnStyles: {
+    // Total = 190 mm
+    // 10 + 190 = 200, sama persis dengan header
+
+    0: {
+      cellWidth: 28,
+      halign: 'center',
+    },
+
+    1: {
+      cellWidth: 25,
+      halign: 'center',
+    },
+
+    2: {
+      cellWidth: 25,
+      halign: 'center',
+    },
+
+    3: {
+      cellWidth: 55,
+      halign: 'center',
+    },
+
+    4: {
+      cellWidth: 57,
+      halign: 'center',
+    },
+  },
+
+  didParseCell: (data) => {
+    if (data.section === 'body') {
+      data.cell.styles.minCellHeight = 32
+    }
+  },
+
+  didDrawCell: (data) => {
+    if (
+      data.section !== 'body' ||
+      data.column.index !== 3
+    ) {
+      return
+    }
+
+    const item = filteredAttendances[data.row.index]
+
+    if (!item) return
+
+    const photoIn = getPhotoUrl(item.photo_in)
+    const photoOut = getPhotoUrl(item.photo_out)
+
+    const imageIn = photoIn
+      ? photoCache.get(photoIn)
+      : undefined
+
+    const imageOut = photoOut
+      ? photoCache.get(photoOut)
+      : undefined
+
+    const padding = 1
+    const dividerX =
+      data.cell.x + data.cell.width / 2
+
+    // Garis pemisah Foto IN dan Foto OUT
+    doc.setLineWidth(0.2)
+
+    doc.line(
+      dividerX,
+      data.cell.y,
+      dividerX,
+      data.cell.y + data.cell.height
+    )
+
+    const imageWidth =
+      data.cell.width / 2 - padding * 2
+
+    const imageHeight =
+      data.cell.height - padding * 2
+
+    // FOTO MASUK
+    if (imageIn) {
+      const format = imageIn.startsWith('data:image/png')
+        ? 'PNG'
+        : 'JPEG'
+
+      doc.addImage(
+        imageIn,
+        format,
+        data.cell.x + padding,
+        data.cell.y + padding,
+        imageWidth,
+        imageHeight
+      )
+    } else {
+      doc.setFontSize(7)
+      doc.text(
+        'IN',
+        data.cell.x + data.cell.width / 4,
+        data.cell.y + data.cell.height / 2,
+        {
+          align: 'center',
+          baseline: 'middle',
+        }
+      )
+    }
+
+    // FOTO PULANG
+    if (imageOut) {
+      const format = imageOut.startsWith('data:image/png')
+        ? 'PNG'
+        : 'JPEG'
+
+      doc.addImage(
+        imageOut,
+        format,
+        dividerX + padding,
+        data.cell.y + padding,
+        imageWidth,
+        imageHeight
+      )
+    } else {
+      doc.setFontSize(7)
+      doc.text(
+        'OUT',
+        dividerX + data.cell.width / 4,
+        data.cell.y + data.cell.height / 2,
+        {
+          align: 'center',
+          baseline: 'middle',
+        }
+      )
+    }
+  },
+
+  didDrawPage: () => {
+    const pageHeight =
+      doc.internal.pageSize.getHeight()
+
+    doc.setFont(
+      'helvetica',
+      'normal'
+    )
+
+    doc.setFontSize(7)
+
+    doc.text(
+      'Minera ClockIn',
+      margin,
+      pageHeight - 8
+    )
+  },
+})
+
+    // =========================================================
+    // SIMPAN PDF
+    // =========================================================
+
+    const filename =
+      `header-absensi-${new Date()
+        .toISOString()
+        .slice(0, 10)}.pdf`
+
+    doc.save(filename)
+
+  } catch (error) {
+    console.error(
+      'Export PDF error:',
+      error
+    )
+
+    alert(
+      'Gagal membuat PDF. Pastikan foto absensi dapat diakses oleh browser.'
+    )
+  }
+}
   // ============================================================
   // OPEN MAP
   // ============================================================
@@ -929,6 +1755,7 @@ const exportPDF = async () => {
   // ============================================================
 
   return (
+    <>
     <div className="min-h-screen bg-slate-100 p-4 md:p-6">
 
       <MapModal
@@ -985,6 +1812,20 @@ const exportPDF = async () => {
               className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
             >
               📄 PDF
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (filteredAttendances.length === 0) {
+                  alert('Tidak ada data untuk diexport.')
+                  return
+                }
+
+                setShowPDF2Form(true)
+              }}
+              className="rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700"
+            >
+              📄 PDF2
             </button>
 
           </div>
@@ -1446,5 +2287,163 @@ const exportPDF = async () => {
 
       </div>
     </div>
+    
+    {showPDF2Form && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-lg rounded-xl bg-white shadow-2xl">
+
+      {/* HEADER MODAL */}
+      <div className="flex items-center justify-between border-b px-6 py-4">
+        <div>
+          <h2 className="text-lg font-bold text-slate-800">
+            Informasi Absensi
+          </h2>
+
+          <p className="mt-1 text-sm text-slate-500">
+            Masukkan informasi yang akan ditampilkan pada PDF.
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setShowPDF2Form(false)}
+          className="text-2xl leading-none text-slate-400 hover:text-slate-700"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* FORM */}
+      <div className="space-y-4 px-6 py-5">
+
+        {/* NAMA */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">
+            Nama Karyawan
+          </label>
+
+          <input
+            type="text"
+            value={pdf2Form.namaKaryawan}
+            onChange={(e) =>
+              setPdf2Form({
+                ...pdf2Form,
+                namaKaryawan: e.target.value,
+              })
+            }
+            placeholder="Masukkan nama karyawan"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-100"
+          />
+        </div>
+
+        {/* NIP / JABATAN */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">
+            NIP / Jabatan
+          </label>
+
+          <input
+            type="text"
+            value={pdf2Form.nipJabatan}
+            onChange={(e) =>
+              setPdf2Form({
+                ...pdf2Form,
+                nipJabatan: e.target.value,
+              })
+            }
+            placeholder="Contoh: 123456 / Operator"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-100"
+          />
+        </div>
+
+        {/* BAGIAN / DEPT */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">
+            Bagian / Dept
+          </label>
+
+          <input
+            type="text"
+            value={pdf2Form.bagianDept}
+            onChange={(e) =>
+              setPdf2Form({
+                ...pdf2Form,
+                bagianDept: e.target.value,
+              })
+            }
+            placeholder="Contoh: Operasional"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-100"
+          />
+        </div>
+
+        {/* LOKASI PROYEK */}
+        <div>
+          <label className="mb-1.5 block text-sm font-medium text-slate-700">
+            Lokasi Proyek
+          </label>
+
+          <input
+            type="text"
+            value={pdf2Form.lokasiProyek}
+            onChange={(e) =>
+              setPdf2Form({
+                ...pdf2Form,
+                lokasiProyek: e.target.value,
+              })
+            }
+            placeholder="Masukkan lokasi proyek"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2.5 text-sm outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-100"
+          />
+        </div>
+      </div>
+
+      {/* FOOTER */}
+      <div className="flex justify-end gap-3 border-t bg-slate-50 px-6 py-4">
+
+        <button
+          type="button"
+          onClick={() => setShowPDF2Form(false)}
+          className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+        >
+          Batal
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!pdf2Form.namaKaryawan.trim()) {
+              alert('Nama Karyawan wajib diisi.')
+              return
+            }
+
+            if (!pdf2Form.nipJabatan.trim()) {
+              alert('NIP / Jabatan wajib diisi.')
+              return
+            }
+
+            if (!pdf2Form.bagianDept.trim()) {
+              alert('Bagian / Dept wajib diisi.')
+              return
+            }
+
+            if (!pdf2Form.lokasiProyek.trim()) {
+              alert('Lokasi Proyek wajib diisi.')
+              return
+            }
+
+            setShowPDF2Form(false)
+
+            exportPDF2(pdf2Form)
+          }}
+          className="rounded-lg bg-red-600 px-5 py-2 text-sm font-semibold text-white hover:bg-red-700"
+        >
+          📄 Generate PDF
+        </button>
+
+      </div>
+    </div>
+  </div>
+    )}
+    </>
   )
 }
