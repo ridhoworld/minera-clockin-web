@@ -58,10 +58,12 @@ interface AttendanceData {
   latitude_in: string | number | null
   longitude_in: string | number | null
   photo_in: string | null
+  address_in?: string | null // <-- Tambahkan baris ini
   clock_out: string | null
   latitude_out: string | number | null
   longitude_out: string | number | null
   photo_out: string | null
+  address_out?: string | null // <-- Tambahkan baris ini
   is_late: boolean
   late_duration: number
   work_duration: number
@@ -650,59 +652,6 @@ const getAttendanceDate = (date: string) => {
 // IMAGE TO DATA URL
 // ============================================================
 
-const imageToDataUrl = async (
-  url: string
-): Promise<string | null> => {
-  try {
-    const token = localStorage.getItem('token')
-    const response = await fetch(url, {
-      headers: {
-        Accept: 'image/*',
-        ...(token
-          ? { Authorization: `Bearer ${token}` }
-          : {}),
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(
-        `HTTP ${response.status} saat memuat foto`
-      )
-    }
-
-    const blob = await response.blob()
-
-    if (!blob.size) {
-      console.error('Foto PDF kosong:', url)
-      return null
-    }
-
-    if (!blob.type.startsWith('image/')) {
-      console.error(
-        'Response foto PDF bukan gambar:',
-        url,
-        blob.type
-      )
-      return null
-    }
-
-    return await new Promise((resolve) => {
-      const reader = new FileReader()
-      reader.onload = () =>
-        resolve(
-          typeof reader.result === 'string'
-            ? reader.result
-            : null
-        )
-      reader.onerror = () => resolve(null)
-      reader.readAsDataURL(blob)
-    })
-  } catch (error) {
-    console.error('Gagal load foto untuk PDF:', url, error)
-    return null
-  }
-}
-
 const reverseGeocode = async (
   latitude: string | number | null,
   longitude: string | number | null
@@ -711,11 +660,10 @@ const reverseGeocode = async (
 
   if (!coordinates) return '-'
 
-  const geocodingUrl =
-    import.meta.env.VITE_GEOCODING_URL
+  const geocodingUrl = import.meta.env.VITE_GEOCODING_URL
 
   if (!geocodingUrl) {
-    return formatLocation(latitude, longitude)
+    return formatLocation(coordinates.latitude, coordinates.longitude)
   }
 
   try {
@@ -727,14 +675,14 @@ const reverseGeocode = async (
       zoom: '18',
       'accept-language': 'id',
     })
-    const response = await fetch(
-      `${geocodingUrl}?${params.toString()}`,
-      {
-        headers: {
-          Accept: 'application/json',
-        },
-      }
-    )
+
+    const response = await fetch(`${geocodingUrl}?${params.toString()}`, {
+      headers: {
+        Accept: 'application/json',
+        // Tambahkan User-Agent jika mengarah ke OpenStreetMap / Nominatim
+        'User-Agent': 'MineraClockInApp/1.0',
+      },
+    })
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`)
@@ -752,28 +700,19 @@ const reverseGeocode = async (
           address.house_number,
           address.hamlet,
           address.neighbourhood,
-          address.village ||
-            address.suburb ||
-            address.quarter,
-          address.town ||
-            address.city_district ||
-            address.district,
-          address.city ||
-            address.municipality ||
-            address.county,
+          address.village || address.suburb || address.quarter,
+          address.town || address.city_district || address.district,
+          address.city || address.municipality || address.county,
           address.state,
           address.postcode,
           address.country,
-        ].filter(
-          (part): part is string =>
-            Boolean(part && part.trim())
-        )
+        ].filter((part): part is string => Boolean(part && part.trim()))
       : []
 
     return (
       addressParts.join(', ') ||
       result.display_name ||
-      formatLocation(latitude, longitude)
+      formatLocation(coordinates.latitude, coordinates.longitude)
     )
   } catch (error) {
     console.error(
@@ -781,7 +720,66 @@ const reverseGeocode = async (
       coordinates,
       error
     )
-    return formatLocation(latitude, longitude)
+    return formatLocation(coordinates.latitude, coordinates.longitude)
+  }
+}
+
+const imageToDataUrl = async (
+  url: string
+): Promise<string | null> => {
+  if (!url) return null
+
+  // Jika URL sudah berupa Data URL / Base64, langsung kembalikan
+  if (url.startsWith('data:image/')) {
+    return url
+  }
+
+  try {
+    const token = localStorage.getItem('token')
+    const isApiUrl = url.startsWith('http') || url.startsWith('/api')
+
+    // Hanya sertakan token Authorization jika memang request ke API backend
+    const headers: Record<string, string> = {
+      Accept: 'image/*',
+    }
+
+    if (token && isApiUrl) {
+      headers['Authorization'] = `Bearer ${token}`
+    }
+
+    const response = await fetch(url, { headers })
+
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} saat memuat foto`)
+    }
+
+    const blob = await response.blob()
+
+    if (!blob.size) {
+      console.error('Foto PDF kosong:', url)
+      return null
+    }
+
+    // Penanganan kaku jika mime type dari server berupa application/octet-stream
+    if (!blob.type.startsWith('image/') && blob.type !== 'application/octet-stream') {
+      console.error(
+        'Response foto PDF bukan gambar:',
+        url,
+        blob.type
+      )
+      return null
+    }
+
+    return await new Promise<string | null>((resolve) => {
+      const reader = new FileReader()
+      reader.onload = () =>
+        resolve(typeof reader.result === 'string' ? reader.result : null)
+      reader.onerror = () => resolve(null)
+      reader.readAsDataURL(blob)
+    })
+  } catch (error) {
+    console.error('Gagal load foto untuk PDF:', url, error)
+    return null
   }
 }
 
@@ -1037,6 +1035,14 @@ const reverseGeocode = async (
 //   }
 // }
 
+// =========================================================
+// CACHE GLOBAL UNTUK EXPORT PDF
+// Selama halaman belum di-refresh, data yang sudah pernah
+// diambil tidak perlu diambil lagi.
+// =========================================================
+
+const pdfPhotoCache = new Map<string, string>()
+const pdfAddressCache = new Map<string, string>()
 const exportPDF2 = async (
   formData: {
     namaKaryawan: string
@@ -1051,468 +1057,312 @@ const exportPDF2 = async (
   }
 
   try {
+    console.time('TOTAL EXPORT PDF')
+
+    // =========================================================
+    // 1. INISIALISASI DOKUMEN
+    // =========================================================
+
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
       format: 'a4',
     })
 
-    // =========================================================
-    // UKURAN HALAMAN
-    // =========================================================
-
-    const pageWidth =
-      doc.internal.pageSize.getWidth()
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
 
     const margin = 10
 
     const headerX = margin
     const headerY = 10
-
-    const headerWidth =
-      pageWidth - margin * 2
-
-    // =========================================================
-    // HEADER
-    // =========================================================
-
+    const headerWidth = pageWidth - margin * 2
     const headerHeight = 20
-
-    // =========================================================
-    // LEBAR 3 KOLOM HEADER
-    // =========================================================
 
     const col1Width = 30
     const col2Width = 114
-
     const col3Width =
-      headerWidth -
-      col1Width -
-      col2Width
+      headerWidth - col1Width - col2Width
 
     const col1X = headerX
-
-    const col2X =
-      col1X + col1Width
-
-    const col3X =
-      col2X + col2Width
+    const col2X = col1X + col1Width
+    const col3X = col2X + col2Width
 
     // =========================================================
-    // HEADER - 3 KOLOM
+    // LOGO - LOAD SEKALI
     // =========================================================
 
-    doc.setLineWidth(0.4)
-
-    // ---------------------------------------------------------
-    // Kolom 1 - Logo
-    // ---------------------------------------------------------
-
-    doc.rect(
-      col1X,
-      headerY,
-      col1Width,
-      headerHeight
-    )
-
-    // ---------------------------------------------------------
-    // Kolom 2 - Judul
-    // ---------------------------------------------------------
-
-    doc.rect(
-      col2X,
-      headerY,
-      col2Width,
-      headerHeight
-    )
-
-    // ---------------------------------------------------------
-    // Kolom 3 - Informasi Dokumen
-    // ---------------------------------------------------------
-
-    doc.rect(
-      col3X,
-      headerY,
-      col3Width,
-      headerHeight
-    )
+    const logoDataUrl = await imageToDataUrl(logo)
 
     // =========================================================
-    // LOGO PERUSAHAAN
+    // HELPER HEADER & INFORMASI KARYAWAN
     // =========================================================
 
-    const logoDataUrl =
-      await imageToDataUrl(logo)
+    const renderHeaderAndInfo = () => {
 
-    if (logoDataUrl) {
-      const logoWidth = 18
-      const logoHeight = 18
+      // BORDER HEADER DOKUMEN
 
-      const imageFormat =
-        logoDataUrl.startsWith(
-          'data:image/png'
+      doc.setLineWidth(0.4)
+
+      doc.rect(
+        col1X,
+        headerY,
+        col1Width,
+        headerHeight
+      )
+
+      doc.rect(
+        col2X,
+        headerY,
+        col2Width,
+        headerHeight
+      )
+
+      doc.rect(
+        col3X,
+        headerY,
+        col3Width,
+        headerHeight
+      )
+
+      // =====================================================
+      // LOGO
+      // =====================================================
+
+      if (logoDataUrl) {
+
+        const logoWidth = 18
+        const logoHeight = 18
+
+        const imageFormat =
+          logoDataUrl.startsWith('data:image/png')
+            ? 'PNG'
+            : 'JPEG'
+
+        doc.addImage(
+          logoDataUrl,
+          imageFormat,
+          col1X +
+            (col1Width - logoWidth) / 2,
+          headerY +
+            (headerHeight - logoHeight) / 2,
+          logoWidth,
+          logoHeight
         )
-          ? 'PNG'
-          : 'JPEG'
+      }
 
-      doc.addImage(
-        logoDataUrl,
-        imageFormat,
-        col1X +
-          (col1Width - logoWidth) / 2,
+      // =====================================================
+      // JUDUL
+      // =====================================================
+
+      doc.setFont(
+        'helvetica',
+        'bold'
+      )
+
+      doc.setFontSize(14)
+
+      doc.text(
+        'ABSENSI KARYAWAN STANDBY / DINAS',
+        col2X + col2Width / 2,
+        headerY + headerHeight / 2 + 1,
+        {
+          align: 'center',
+          baseline: 'middle',
+        }
+      )
+
+      // =====================================================
+      // FORM INFO
+      // =====================================================
+
+      const rowHeight =
+        headerHeight / 3
+
+      doc.setFont(
+        'helvetica',
+        'normal'
+      )
+
+      doc.setFontSize(9)
+
+      doc.text(
+        'No. Form :',
+        col3X + 2,
+        headerY + rowHeight / 2 + 1
+      )
+
+      doc.text(
+        'No. Revisi :',
+        col3X + 2,
         headerY +
-          (headerHeight - logoHeight) / 2,
-        logoWidth,
-        logoHeight
+          rowHeight +
+          rowHeight / 2 +
+          1
+      )
+
+      doc.text(
+        'Tgl Berlaku :',
+        col3X + 2,
+        headerY +
+          rowHeight * 2 +
+          rowHeight / 2 +
+          1
+      )
+
+      // =====================================================
+      // INFORMASI KARYAWAN
+      // =====================================================
+
+      const infoStartY =
+        headerY +
+        headerHeight +
+        4
+
+      const infoColWidth =
+        headerWidth / 2
+
+      const infoCol1X =
+        margin
+
+      const infoCol2X =
+        margin + infoColWidth
+
+      const infoRowHeight = 5
+
+      const infoLabelGap = 2
+
+      doc.setFont(
+        'helvetica',
+        'normal'
+      )
+
+      doc.setFontSize(9)
+
+      // =====================================================
+      // KIRI
+      // =====================================================
+
+      doc.text(
+        'Nama Karyawan',
+        infoCol1X,
+        infoStartY
+      )
+
+      doc.text(
+        ':',
+        infoCol1X +
+          30 +
+          infoLabelGap,
+        infoStartY
+      )
+
+      doc.text(
+        formData.namaKaryawan || '-',
+        infoCol1X +
+          30 +
+          infoLabelGap +
+          2,
+        infoStartY
+      )
+
+      doc.text(
+        'NIP / Jabatan',
+        infoCol1X,
+        infoStartY +
+          infoRowHeight
+      )
+
+      doc.text(
+        ':',
+        infoCol1X +
+          30 +
+          infoLabelGap,
+        infoStartY +
+          infoRowHeight
+      )
+
+      doc.text(
+        formData.nipJabatan || '-',
+        infoCol1X +
+          30 +
+          infoLabelGap +
+          2,
+        infoStartY +
+          infoRowHeight
+      )
+
+      // =====================================================
+      // KANAN
+      // =====================================================
+
+      doc.text(
+        'Bagian / Dept',
+        infoCol2X,
+        infoStartY
+      )
+
+      doc.text(
+        ':',
+        infoCol2X +
+          30 +
+          infoLabelGap,
+        infoStartY
+      )
+
+      doc.text(
+        formData.bagianDept || '-',
+        infoCol2X +
+          30 +
+          infoLabelGap +
+          2,
+        infoStartY
+      )
+
+      doc.text(
+        'Lokasi Proyek',
+        infoCol2X,
+        infoStartY +
+          infoRowHeight
+      )
+
+      doc.text(
+        ':',
+        infoCol2X +
+          30 +
+          infoLabelGap,
+        infoStartY +
+          infoRowHeight
+      )
+
+      doc.text(
+        formData.lokasiProyek || '-',
+        infoCol2X +
+          30 +
+          infoLabelGap +
+          2,
+        infoStartY +
+          infoRowHeight
+      )
+
+      return (
+        infoStartY +
+        infoRowHeight * 2 -
+        3
       )
     }
 
     // =========================================================
-    // KOLOM 2 - JUDUL
-    // =========================================================
-
-    doc.setFont(
-      'helvetica',
-      'bold'
-    )
-
-    doc.setFontSize(14)
-
-    doc.text(
-      'ABSENSI KARYAWAN STANDBY / DINAS',
-      col2X +
-        col2Width / 2,
-      headerY +
-        headerHeight / 2 +
-        1,
-      {
-        align: 'center',
-        baseline: 'middle',
-      }
-    )
-
-    // =========================================================
-    // KOLOM 3 - INFORMASI DOKUMEN
-    // =========================================================
-
-    const rowHeight =
-      headerHeight / 3
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(9)
-
-    // Row 1
-    doc.text(
-      'No. Form :',
-      col3X + 2,
-      headerY +
-        rowHeight / 2 +
-        1
-    )
-
-    // Row 2
-    doc.text(
-      'No. Revisi :',
-      col3X + 2,
-      headerY +
-        rowHeight +
-        rowHeight / 2 +
-        1
-    )
-
-    // Row 3
-    doc.text(
-      'Tgl Berlaku :',
-      col3X + 2,
-      headerY +
-        rowHeight * 2 +
-        rowHeight / 2 +
-        1
-    )
-
-    // =========================================================
-    // INFORMASI KARYAWAN
-    // 2 KOLOM - TANPA BORDER
-    // =========================================================
-
-    const infoStartY =
-      headerY +
-      headerHeight +
-      4
-
-    const infoColWidth =
-      headerWidth / 2
-
-    const infoCol1X = margin
-
-    const infoCol2X =
-      margin +
-      infoColWidth
-
-    const infoRowHeight = 5
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(9)
-
-    // ---------------------------------------------------------
-    // KOLOM KIRI
-    // ---------------------------------------------------------
-
-    const infoLabelGap = 2
-
-    doc.text(
-      'Nama Karyawan',
-      infoCol1X,
-      infoStartY
-    )
-
-    doc.text(
-      ':',
-      infoCol1X +
-        30 +
-        infoLabelGap,
-      infoStartY
-    )
-
-    doc.text(
-      formData.namaKaryawan,
-      infoCol1X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY
-    )
-
-    doc.text(
-      'NIP / Jabatan',
-      infoCol1X,
-      infoStartY +
-        infoRowHeight
-    )
-
-    doc.text(
-      ':',
-      infoCol1X +
-        30 +
-        infoLabelGap,
-      infoStartY +
-        infoRowHeight
-    )
-
-    doc.text(
-      formData.nipJabatan,
-      infoCol1X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY +
-        infoRowHeight
-    )
-
-    // ---------------------------------------------------------
-    // KOLOM KANAN
-    // ---------------------------------------------------------
-
-    doc.text(
-      'Bagian / Dept',
-      infoCol2X,
-      infoStartY
-    )
-
-    doc.text(
-      ':',
-      infoCol2X +
-        30 +
-        infoLabelGap,
-      infoStartY
-    )
-
-    doc.text(
-      formData.bagianDept,
-      infoCol2X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY
-    )
-
-    doc.text(
-      'Lokasi Proyek',
-      infoCol2X,
-      infoStartY +
-        infoRowHeight
-    )
-
-    doc.text(
-      ':',
-      infoCol2X +
-        30 +
-        infoLabelGap,
-      infoStartY +
-        infoRowHeight
-    )
-
-    doc.text(
-      formData.lokasiProyek,
-      infoCol2X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY +
-        infoRowHeight
-    )
-
-    // =========================================================
-    // CACHE FOTO
-    // =========================================================
-
-    const photoCache =
-      new Map<string, string>()
-
-    // =========================================================
-    // CACHE ALAMAT
-    // =========================================================
-
-    const addressCache =
-      new Map<string, string>()
-
-    // =========================================================
-    // AMBIL FOTO DARI filteredAttendances
-    // =========================================================
-
-    for (
-      const item of filteredAttendances
-    ) {
-      const photoUrls = [
-        getPhotoUrl(item.photo_in),
-        getPhotoUrl(item.photo_out),
-      ]
-
-      for (
-        const photoUrl of photoUrls
-      ) {
-        if (
-          photoUrl &&
-          !photoCache.has(photoUrl)
-        ) {
-          const dataUrl =
-            photoUrl.startsWith(
-              'data:image/'
-            )
-              ? photoUrl
-              : await imageToDataUrl(
-                  photoUrl
-                )
-
-          if (dataUrl) {
-            photoCache.set(
-              photoUrl,
-              dataUrl
-            )
-          } else {
-            console.error(
-              'Foto gagal dimuat untuk PDF:',
-              photoUrl
-            )
-          }
-        }
-      }
-    }
-
-    // =========================================================
-    // AMBIL ALAMAT BERDASARKAN LATITUDE & LONGITUDE
-    // =========================================================
-
-    for (
-      const item of filteredAttendances
-    ) {
-      const addressCoordinates = [
-        [
-          item.latitude_in,
-          item.longitude_in,
-        ],
-        [
-          item.latitude_out,
-          item.longitude_out,
-        ],
-      ] as const
-
-      for (
-        const [
-          latitude,
-          longitude,
-        ] of addressCoordinates
-      ) {
-        const coordinates =
-          getCoordinates(
-            latitude,
-            longitude
-          )
-
-        if (!coordinates) {
-          continue
-        }
-
-        const key =
-          `${coordinates.latitude},${coordinates.longitude}`
-
-        // Jangan request alamat yang sama berkali-kali
-        if (
-          !addressCache.has(key)
-        ) {
-          try {
-            const address =
-              await reverseGeocode(
-                coordinates.latitude,
-                coordinates.longitude
-              )
-
-            addressCache.set(
-              key,
-              address ||
-                formatLocation(
-                  latitude,
-                  longitude
-                )
-            )
-          } catch (error) {
-            console.error(
-              'Gagal mengambil alamat:',
-              latitude,
-              longitude,
-              error
-            )
-
-            // Jika reverse geocode gagal,
-            // tampilkan koordinat sebagai fallback
-            addressCache.set(
-              key,
-              formatLocation(
-                latitude,
-                longitude
-              )
-            )
-          }
-        }
-      }
-    }
-
-    // =========================================================
-    // FUNGSI FORMAT TANGGAL
+    // FORMAT TANGGAL
     // =========================================================
 
     const formatTanggalPDF = (
       value: any
     ) => {
-      if (!value) return '-'
+
+      if (!value) {
+        return '-'
+      }
 
       try {
         return formatDate(value)
@@ -1522,561 +1372,709 @@ const exportPDF2 = async (
     }
 
     // =========================================================
-// DATA TABEL
-// =========================================================
-
-const tableBody =
-  filteredAttendances.map((item) => {
-
-    // ---------------------------------------------------
-    // KOORDINAT MASUK
-    // ---------------------------------------------------
-
-    const coordinatesIn =
-      getCoordinates(
-        item.latitude_in,
-        item.longitude_in
-      )
-
-    // ---------------------------------------------------
-    // KOORDINAT PULANG
-    // ---------------------------------------------------
-
-    const coordinatesOut =
-      getCoordinates(
-        item.latitude_out,
-        item.longitude_out
-      )
-
-    // ---------------------------------------------------
-    // ALAMAT MASUK
-    // ---------------------------------------------------
-
-    const addressIn =
-      coordinatesIn
-        ? addressCache.get(
-            `${coordinatesIn.latitude},${coordinatesIn.longitude}`
-          ) ||
-          formatLocation(
-            item.latitude_in,
-            item.longitude_in
-          )
-        : '-'
-
-    // ---------------------------------------------------
-    // ALAMAT PULANG
-    // ---------------------------------------------------
-
-    const addressOut =
-      coordinatesOut
-        ? addressCache.get(
-            `${coordinatesOut.latitude},${coordinatesOut.longitude}`
-          ) ||
-          formatLocation(
-            item.latitude_out,
-            item.longitude_out
-          )
-        : '-'
-
-    return [
-      // -------------------------------------------------
-      // 1. HARI / TANGGAL
-      // -------------------------------------------------
-
-      formatTanggalPDF(item.date),
-
-      // -------------------------------------------------
-      // 2. MASUK
-      // Foto + Jam In + Lokasi In
-      // -------------------------------------------------
-
-      '',
-
-      // -------------------------------------------------
-      // 3. PULANG
-      // Foto + Jam Out + Lokasi Out
-      // -------------------------------------------------
-
-      '',
-    ]
-  })
-
-
-// =========================================================
-// DATA DETAIL UNTUK KOLOM MASUK / PULANG
-// =========================================================
-
-const attendanceDetails =
-  filteredAttendances.map((item) => {
-
-    const coordinatesIn =
-      getCoordinates(
-        item.latitude_in,
-        item.longitude_in
-      )
-
-    const coordinatesOut =
-      getCoordinates(
-        item.latitude_out,
-        item.longitude_out
-      )
-
-    const addressIn =
-      coordinatesIn
-        ? addressCache.get(
-            `${coordinatesIn.latitude},${coordinatesIn.longitude}`
-          ) ||
-          formatLocation(
-            item.latitude_in,
-            item.longitude_in
-          )
-        : '-'
-
-    const addressOut =
-      coordinatesOut
-        ? addressCache.get(
-            `${coordinatesOut.latitude},${coordinatesOut.longitude}`
-          ) ||
-          formatLocation(
-            item.latitude_out,
-            item.longitude_out
-          )
-        : '-'
-
-    return {
-      clockIn: item.clock_in || '-',
-      clockOut: item.clock_out || '-',
-
-      addressIn,
-      addressOut,
-
-      photoIn:
-        getPhotoUrl(item.photo_in),
-
-      photoOut:
-        getPhotoUrl(item.photo_out),
-    }
-  })
-
-    // =========================================================
-    // POSISI TABEL
+    // 2. LOAD FOTO PARALEL
     // =========================================================
 
-    const tableStartY =
-      infoStartY +
-      infoRowHeight * 2 - 3
-
-    // =========================================================
-// TABEL ABSENSI
-// =========================================================
-
-autoTable(doc, {
-  startY: tableStartY,
-
-  // =======================================================
-  // HEADER
-  // =======================================================
-
-  head: [[
-    'Hari / Tanggal',
-    'Masuk',
-    'Pulang',
-  ]],
-
-  body: tableBody,
-
-  theme: 'grid',
-
-  tableWidth: headerWidth,
-
-  margin: {
-    left: margin,
-    right: margin,
-  },
-
-  // =======================================================
-  // STYLE UMUM
-  // =======================================================
-
-  styles: {
-    font: 'helvetica',
-    fontStyle: 'normal',
-    fontSize: 8,
-    textColor: [0, 0, 0],
-    fillColor: [255, 255, 255],
-
-    cellPadding: 2,
-
-    valign: 'middle',
-    halign: 'center',
-
-    overflow: 'linebreak',
-
-    lineWidth: 0.5,
-    lineColor: [0, 0, 0],
-  },
-
-  // =======================================================
-  // HEADER STYLE
-  // =======================================================
-
-  headStyles: {
-    font: 'helvetica',
-    fontStyle: 'bold',
-    fontSize: 8.5,
-
-    textColor: [0, 0, 0],
-    fillColor: [255, 255, 255],
-
-    cellPadding: 2,
-
-    halign: 'center',
-    valign: 'middle',
-
-    lineWidth: 0.5,
-    lineColor: [0, 0, 0],
-  },
-
-  // =======================================================
-  // LEBAR KOLOM
-  // =======================================================
-
-  columnStyles: {
-
-    // Hari / Tanggal
-    0: {
-      cellWidth: 32,
-      halign: 'center',
-      valign: 'middle',
-    },
-
-    // Masuk
-    1: {
-      cellWidth: 79,
-      halign: 'center',
-      valign: 'middle',
-    },
-
-    // Pulang
-    2: {
-      cellWidth: 79,
-      halign: 'center',
-      valign: 'middle',
-    },
-  },
-
-  // =======================================================
-  // TINGGI BARIS
-  // =======================================================
-
-  didParseCell: (data) => {
-
-    if (
-      data.section === 'body'
-    ) {
-      data.cell.styles.minCellHeight = 36
-    }
-  },
-
-  // =======================================================
-  // GAMBAR + DETAIL ABSENSI
-  // =======================================================
-
-  didDrawCell: (data) => {
-
-    // Hanya body
-    if (
-      data.section !== 'body'
-    ) {
-      return
-    }
-
-    // Kolom tanggal tidak perlu diproses
-    if (
-      data.column.index === 0
-    ) {
-      return
-    }
-
-    const item =
-      attendanceDetails[data.row.index]
-
-    if (!item) return
-
-    // =====================================================
-    // TENTUKAN DATA MASUK / PULANG
-    // =====================================================
-
-    const isMasuk =
-      data.column.index === 1
-
-    const photo =
-      isMasuk
-        ? item.photoIn
-        : item.photoOut
-
-    const clock =
-      isMasuk
-        ? item.clockIn
-        : item.clockOut
-
-    const address =
-      isMasuk
-        ? item.addressIn
-        : item.addressOut
-
-    // =====================================================
-    // AMBIL FOTO DARI CACHE
-    // =====================================================
-
-    const image =
-      photo
-        ? photoCache.get(photo)
-        : undefined
-
-    // =====================================================
-    // AREA CELL
-    // =====================================================
-
-    const cellX =
-      data.cell.x
-
-    const cellY =
-      data.cell.y
-
-    const cellWidth =
-      data.cell.width
-
-    const cellHeight =
-      data.cell.height
-
-    const padding =  1.5
-
-    // =====================================================
-    // UKURAN FOTO
-    // =====================================================
-
-    const imageWidth =
-      35
-
-    const imageHeight =
-      22
-
-    
-
-    // =====================================================
-// AREA FOTO
-// =====================================================
-
-
-// Area maksimum yang disediakan untuk foto
-const maxImageWidth =
-  data.cell.width - padding * 2
-
-const maxImageHeight = 22
-
-const imageX =
-  data.cell.x + padding
-
-const imageY =
-  data.cell.y + padding
-
-// =====================================================
-// FOTO
-// =====================================================
-
-if (image) {
-
-  const imageProperties =
-    doc.getImageProperties(image)
-
-  const originalWidth =
-    imageProperties.width
-
-  const originalHeight =
-    imageProperties.height
-
-  // Rasio foto asli
-  const aspectRatio =
-    originalWidth / originalHeight
-
-  // ===================================================
-  // HITUNG UKURAN FOTO SECARA PROPORSIONAL
-  // ===================================================
-
-  let drawWidth =
-    maxImageWidth
-
-  let drawHeight =
-    drawWidth / aspectRatio
-
-  // Kalau tinggi melebihi area maksimum,
-  // sesuaikan berdasarkan tinggi
-  if (drawHeight > maxImageHeight) {
-
-    drawHeight =
-      maxImageHeight
-
-    drawWidth =
-      drawHeight * aspectRatio
-  }
-
-  // ===================================================
-  // POSISI FOTO DI TENGAH
-  // ===================================================
-
-  const drawX =
-    data.cell.x +
-    (data.cell.width - drawWidth) / 2
-
-  const drawY =
-    data.cell.y +
-    padding +
-    (maxImageHeight - drawHeight) / 2
-
-  // ===================================================
-  // FORMAT FOTO
-  // ===================================================
-
-  const format =
-    image.startsWith('data:image/png')
-      ? 'PNG'
-      : 'JPEG'
-
-  // ===================================================
-  // GAMBAR FOTO
-  // ===================================================
-
-  doc.addImage(
-    image,
-    format,
-    drawX,
-    drawY,
-    drawWidth,
-    drawHeight
-  )
-} else {
-
-      doc.setFont(
-        'helvetica',
-        'normal'
+    console.time('PDF - FOTO')
+
+    const uniquePhotoUrls =
+      Array.from(
+        new Set(
+          filteredAttendances
+            .flatMap(
+              (item) => [
+                getPhotoUrl(item.photo_in),
+                getPhotoUrl(item.photo_out),
+              ]
+            )
+            .filter(
+              (
+                url
+              ): url is string =>
+                Boolean(url)
+            )
+        )
       )
 
-      doc.setFontSize(7)
+    const photosToLoad =
+      uniquePhotoUrls.filter(
+        (url) =>
+          !pdfPhotoCache.has(url)
+      )
 
-      doc.text(
-        isMasuk
-          ? 'FOTO IN'
-          : 'FOTO OUT',
+    await Promise.all(
+      photosToLoad.map(
+        async (photoUrl) => {
 
-        cellX +
-          cellWidth / 2,
+          try {
 
-        imageY +
-          imageHeight / 2,
+            const dataUrl =
+              photoUrl.startsWith(
+                'data:image/'
+              )
+                ? photoUrl
+                : await imageToDataUrl(
+                    photoUrl
+                  )
 
-        {
-          align: 'center',
-          baseline: 'middle',
+            if (dataUrl) {
+              pdfPhotoCache.set(
+                photoUrl,
+                dataUrl
+              )
+            }
+
+          } catch (error) {
+
+            console.error(
+              'Foto gagal dimuat:',
+              photoUrl,
+              error
+            )
+          }
         }
       )
-    }
-
-    // =====================================================
-    // JAM
-    // =====================================================
-
-    const detailStartY =
-      imageY +
-      imageHeight +
-      2.5
-
-    doc.setFont(
-      'helvetica',
-      'bold'
     )
 
-    doc.setFontSize(7)
-
-    doc.text(
-      isMasuk
-        ? `Jam Masuk : ${clock}`
-        : `Jam Pulang : ${clock}`,
-
-      cellX +
-        cellWidth / 2,
-
-      detailStartY,
-
-      {
-        align: 'center',
-      }
-    )
-
-    // =====================================================
-    // LOKASI
-    // =====================================================
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(6.5)
-
-    const locationText =
-      isMasuk
-        ? `Lokasi Masuk : ${address}`
-        : `Lokasi Pulang : ${address}`
-
-    // Pecah teks jika terlalu panjang
-    const locationLines =
-      doc.splitTextToSize(
-        locationText,
-        cellWidth - 6
-      )
-
-    doc.text(
-      locationLines,
-      cellX +
-        cellWidth / 2,
-
-      detailStartY + 3,
-
-      {
-        align: 'center',
-        maxWidth:
-          cellWidth - 6,
-      }
-    )
-  },
-
-  // =======================================================
-  // FOOTER
-  // =======================================================
-
-  didDrawPage: () => {
-
-    const pageHeight =
-      doc.internal.pageSize.getHeight()
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(7)
-
-    doc.text(
-      'Minera ClockIn',
-      margin,
-      pageHeight - 8
-    )
-  },
-})
+    console.timeEnd('PDF - FOTO')
 
     // =========================================================
-    // SIMPAN PDF
+    // 3. SIAPKAN DATA DETAIL
+    //
+    // TIDAK ADA REVERSE GEOCODE DI SINI
+    //
+    // Lokasi langsung dari:
+    // item.address_in
+    // item.address_out
+    // =========================================================
+
+    console.time(
+      'PDF - PREPARE DATA'
+    )
+
+    const attendanceDetails =
+      filteredAttendances.map(
+        (item) => {
+
+          // ===================================================
+          // KOORDINAT FALLBACK
+          // ===================================================
+
+          const coordinatesIn =
+            getCoordinates(
+              item.latitude_in,
+              item.longitude_in
+            )
+
+          const coordinatesOut =
+            getCoordinates(
+              item.latitude_out,
+              item.longitude_out
+            )
+
+          // ===================================================
+          // ADDRESS IN DARI API
+          // ===================================================
+
+          const addressIn =
+            item.address_in
+              ? String(
+                  item.address_in
+                )
+              : coordinatesIn
+                ? formatLocation(
+                    item.latitude_in,
+                    item.longitude_in
+                  )
+                : '-'
+
+          // ===================================================
+          // ADDRESS OUT DARI API
+          // ===================================================
+
+          const addressOut =
+            item.address_out
+              ? String(
+                  item.address_out
+                )
+              : coordinatesOut
+                ? formatLocation(
+                    item.latitude_out,
+                    item.longitude_out
+                  )
+                : '-'
+
+          return {
+
+            date:
+              formatTanggalPDF(
+                item.date
+              ),
+
+            clockIn:
+              item.clock_in || '-',
+
+            clockOut:
+              item.clock_out || '-',
+
+            // HASIL DARI API
+            addressIn,
+
+            addressOut,
+
+            photoIn:
+              getPhotoUrl(
+                item.photo_in
+              ),
+
+            photoOut:
+              getPhotoUrl(
+                item.photo_out
+              ),
+          }
+        }
+      )
+
+    console.timeEnd(
+      'PDF - PREPARE DATA'
+    )
+
+    // =========================================================
+    // 4. RENDERING AUTOTABLE
+    //    MAKSIMAL 6 DATA PER HALAMAN
+    // =========================================================
+
+    console.time(
+      'PDF - AUTOTABLE'
+    )
+
+    const ITEMS_PER_PAGE = 6
+
+    const totalPages =
+      Math.ceil(
+        attendanceDetails.length /
+          ITEMS_PER_PAGE
+      )
+
+    for (
+      let pageIndex = 0;
+      pageIndex < totalPages;
+      pageIndex++
+    ) {
+
+      // =====================================================
+      // HALAMAN BARU
+      // =====================================================
+
+      if (pageIndex > 0) {
+        doc.addPage()
+      }
+
+      // =====================================================
+      // HEADER
+      // =====================================================
+
+      const tableStartY =
+        renderHeaderAndInfo()
+
+      // =====================================================
+      // DATA PER HALAMAN
+      // =====================================================
+
+      const pageChunk =
+        attendanceDetails.slice(
+          pageIndex *
+            ITEMS_PER_PAGE,
+
+          (pageIndex + 1) *
+            ITEMS_PER_PAGE
+        )
+
+      const tableBody =
+        pageChunk.map(
+          (item) => [
+            item.date,
+            '',
+            '',
+          ]
+        )
+
+      // =====================================================
+      // AUTOTABLE
+      // =====================================================
+
+      autoTable(doc, {
+
+        startY:
+          tableStartY,
+
+        head: [
+          [
+            'Hari / Tanggal',
+            'Masuk',
+            'Pulang',
+          ],
+        ],
+
+        body:
+          tableBody,
+
+        theme:
+          'grid',
+
+        tableWidth:
+          headerWidth,
+
+        margin: {
+          left: margin,
+          right: margin,
+        },
+
+        styles: {
+
+          font:
+            'helvetica',
+
+          fontStyle:
+            'normal',
+
+          fontSize:
+            8,
+
+          textColor: [
+            0,
+            0,
+            0,
+          ],
+
+          fillColor: [
+            255,
+            255,
+            255,
+          ],
+
+          cellPadding:
+            2,
+
+          valign:
+            'middle',
+
+          halign:
+            'center',
+
+          overflow:
+            'linebreak',
+
+          lineWidth:
+            0.5,
+
+          lineColor: [
+            0,
+            0,
+            0,
+          ],
+        },
+
+        headStyles: {
+
+          font:
+            'helvetica',
+
+          fontStyle:
+            'bold',
+
+          fontSize:
+            8.5,
+
+          textColor: [
+            0,
+            0,
+            0,
+          ],
+
+          fillColor: [
+            255,
+            255,
+            255,
+          ],
+
+          cellPadding:
+            2,
+
+          halign:
+            'center',
+
+          valign:
+            'middle',
+
+          lineWidth:
+            0.5,
+
+          lineColor: [
+            0,
+            0,
+            0,
+          ],
+        },
+
+        columnStyles: {
+
+          0: {
+            cellWidth: 32,
+            halign: 'center',
+            valign: 'middle',
+          },
+
+          1: {
+            cellWidth: 79,
+            halign: 'center',
+            valign: 'middle',
+          },
+
+          2: {
+            cellWidth: 79,
+            halign: 'center',
+            valign: 'middle',
+          },
+        },
+
+        // ===================================================
+        // TINGGI BARIS
+        // ===================================================
+
+        didParseCell:
+          (data) => {
+
+            if (
+              data.section ===
+              'body'
+            ) {
+
+              data.cell.styles.minCellHeight =
+                36
+            }
+          },
+
+        // ===================================================
+        // GAMBAR + JAM + LOKASI
+        // ===================================================
+
+        didDrawCell:
+          (data) => {
+
+            if (
+              data.section !==
+                'body' ||
+              data.column.index === 0
+            ) {
+              return
+            }
+
+            // =================================================
+            // AMBIL DATA
+            // =================================================
+
+            const item =
+              pageChunk[
+                data.row.index
+              ]
+
+            if (!item) {
+              return
+            }
+
+            const isMasuk =
+              data.column.index === 1
+
+            const photo =
+              isMasuk
+                ? item.photoIn
+                : item.photoOut
+
+            const clock =
+              isMasuk
+                ? item.clockIn
+                : item.clockOut
+
+            // =================================================
+            // ADDRESS DARI API
+            // =================================================
+
+            const address =
+              isMasuk
+                ? item.addressIn
+                : item.addressOut
+
+            // =================================================
+            // FOTO DARI CACHE
+            // =================================================
+
+            const image =
+              photo
+                ? pdfPhotoCache.get(
+                    photo
+                  )
+                : undefined
+
+            const cellX =
+              data.cell.x
+
+            const cellY =
+              data.cell.y
+
+            const cellWidth =
+              data.cell.width
+
+            const padding = 1.5
+
+            const maxImageWidth =
+              cellWidth -
+              padding * 2
+
+            const maxImageHeight =
+              22
+
+            const imageY =
+              cellY +
+              padding
+
+            // =================================================
+            // RENDER FOTO
+            // =================================================
+
+            if (image) {
+
+              try {
+
+                const imageProperties =
+                  doc.getImageProperties(
+                    image
+                  )
+
+                const originalWidth =
+                  imageProperties.width
+
+                const originalHeight =
+                  imageProperties.height
+
+                if (
+                  originalWidth > 0 &&
+                  originalHeight > 0
+                ) {
+
+                  const aspectRatio =
+                    originalWidth /
+                    originalHeight
+
+                  let drawWidth =
+                    maxImageWidth
+
+                  let drawHeight =
+                    drawWidth /
+                    aspectRatio
+
+                  if (
+                    drawHeight >
+                    maxImageHeight
+                  ) {
+
+                    drawHeight =
+                      maxImageHeight
+
+                    drawWidth =
+                      drawHeight *
+                      aspectRatio
+                  }
+
+                  const drawX =
+                    cellX +
+                    (
+                      cellWidth -
+                      drawWidth
+                    ) / 2
+
+                  const drawY =
+                    cellY +
+                    padding +
+                    (
+                      maxImageHeight -
+                      drawHeight
+                    ) / 2
+
+                  const imageFormat =
+                    image.startsWith(
+                      'data:image/png'
+                    )
+                      ? 'PNG'
+                      : 'JPEG'
+
+                  doc.addImage(
+                    image,
+                    imageFormat,
+                    drawX,
+                    drawY,
+                    drawWidth,
+                    drawHeight
+                  )
+                }
+
+              } catch (e) {
+
+                console.warn(
+                  'Gagal merender gambar di PDF cell:',
+                  e
+                )
+              }
+
+            } else {
+
+              doc.setFont(
+                'helvetica',
+                'normal'
+              )
+
+              doc.setFontSize(7)
+
+              doc.text(
+                isMasuk
+                  ? 'NO PHOTO (IN)'
+                  : 'NO PHOTO (OUT)',
+
+                cellX +
+                  cellWidth / 2,
+
+                imageY + 11,
+
+                {
+                  align:
+                    'center',
+
+                  baseline:
+                    'middle',
+                }
+              )
+            }
+
+            // =================================================
+            // TEXT JAM
+            // =================================================
+
+            const detailStartY =
+              imageY +
+              maxImageHeight +
+              2.5
+
+            doc.setFont(
+              'helvetica',
+              'bold'
+            )
+
+            doc.setFontSize(7)
+
+            doc.text(
+
+              isMasuk
+                ? `Jam Masuk : ${clock}`
+                : `Jam Pulang : ${clock}`,
+
+              cellX +
+                cellWidth / 2,
+
+              detailStartY,
+
+              {
+                align:
+                  'center',
+              }
+            )
+
+            // =================================================
+            // TEXT LOKASI
+            // =================================================
+
+            doc.setFont(
+              'helvetica',
+              'normal'
+            )
+
+            doc.setFontSize(6.5)
+
+            const locationText =
+              isMasuk
+                ? `Lokasi Masuk : ${address}`
+                : `Lokasi Pulang : ${address}`
+
+            const locationLines =
+              doc.splitTextToSize(
+                locationText,
+                cellWidth - 6
+              )
+
+            doc.text(
+              locationLines,
+
+              cellX +
+                cellWidth / 2,
+
+              detailStartY + 3,
+
+              {
+                align:
+                  'center',
+
+                maxWidth:
+                  cellWidth - 6,
+              }
+            )
+          },
+
+        // =====================================================
+        // FOOTER
+        // =====================================================
+
+        didDrawPage:
+          () => {
+
+            doc.setFont(
+              'helvetica',
+              'normal'
+            )
+
+            doc.setFontSize(7)
+
+            doc.text(
+              'Minera ClockIn',
+              margin,
+              pageHeight - 8
+            )
+
+            doc.text(
+              `Halaman ${
+                pageIndex + 1
+              } dari ${
+                totalPages
+              }`,
+
+              pageWidth -
+                margin,
+
+              pageHeight - 8,
+
+              {
+                align:
+                  'right',
+              }
+            )
+          },
+      })
+    }
+
+    console.timeEnd(
+      'PDF - AUTOTABLE'
+    )
+
+    // =========================================================
+    // 5. SIMPAN PDF
     // =========================================================
 
     const filename =
@@ -2086,6 +2084,10 @@ if (image) {
 
     doc.save(filename)
 
+    console.timeEnd(
+      'TOTAL EXPORT PDF'
+    )
+
   } catch (error) {
 
     console.error(
@@ -2094,7 +2096,7 @@ if (image) {
     )
 
     alert(
-      'Gagal membuat PDF. Pastikan foto absensi dan alamat lokasi dapat diakses oleh browser.'
+      'Gagal membuat PDF. Periksa log konsol untuk detail error.'
     )
   }
 }
@@ -2108,12 +2110,17 @@ const exportPDF3 = async (
     lokasiProyek: string
   }
 ) => {
-  if (filteredAttendances.length === 0) {
+  if (!filteredAttendances || filteredAttendances.length === 0) {
     alert('Tidak ada data untuk diexport.')
     return
   }
 
   try {
+    console.time('TOTAL EXPORT PDF3')
+
+    // =========================================================
+    // DOCUMENT
+    // =========================================================
     const doc = new jsPDF({
       orientation: 'portrait',
       unit: 'mm',
@@ -2121,48 +2128,32 @@ const exportPDF3 = async (
     })
 
     // =========================================================
-    // UKURAN HALAMAN
+    // UKURAN HALAMAN & MARGIN
     // =========================================================
-
-    const pageWidth =
-      doc.internal.pageSize.getWidth()
-
-    const pageHeight =
-      doc.internal.pageSize.getHeight()
-
+    const pageWidth = doc.internal.pageSize.getWidth()
+    const pageHeight = doc.internal.pageSize.getHeight()
     const margin = 10
 
     const headerX = margin
     const headerY = 10
-
-    const headerWidth =
-      pageWidth - margin * 2
+    const headerWidth = pageWidth - margin * 2
 
     // =========================================================
-    // HEADER
+    // HEADER (BOX & LOGO & JUDUL)
     // =========================================================
-
     const headerHeight = 20
 
     const col1Width = 30
     const col2Width = 114
-
-    const col3Width =
-      headerWidth -
-      col1Width -
-      col2Width
+    const col3Width = headerWidth - col1Width - col2Width
 
     const col1X = headerX
-
-    const col2X =
-      col1X + col1Width
-
-    const col3X =
-      col2X + col2Width
+    const col2X = col1X + col1Width
+    const col3X = col2X + col2Width
 
     doc.setLineWidth(0.4)
 
-    // Logo
+    // Box Logo
     doc.rect(
       col1X,
       headerY,
@@ -2170,7 +2161,7 @@ const exportPDF3 = async (
       headerHeight
     )
 
-    // Judul
+    // Box Judul
     doc.rect(
       col2X,
       headerY,
@@ -2178,7 +2169,7 @@ const exportPDF3 = async (
       headerHeight
     )
 
-    // Informasi dokumen
+    // Box Informasi Dokumen
     doc.rect(
       col3X,
       headerY,
@@ -2187,53 +2178,46 @@ const exportPDF3 = async (
     )
 
     // =========================================================
-    // LOGO
+    // RENDER LOGO
     // =========================================================
+    if (typeof logo !== 'undefined' && logo) {
+      try {
+        const logoDataUrl = await imageToDataUrl(logo)
 
-    const logoDataUrl =
-      await imageToDataUrl(logo)
+        if (logoDataUrl) {
+          const logoWidth = 18
+          const logoHeight = 18
 
-    if (logoDataUrl) {
-      const logoWidth = 18
-      const logoHeight = 18
+          const imageFormat = logoDataUrl.startsWith(
+            'data:image/png'
+          )
+            ? 'PNG'
+            : 'JPEG'
 
-      const imageFormat =
-        logoDataUrl.startsWith(
-          'data:image/png'
-        )
-          ? 'PNG'
-          : 'JPEG'
-
-      doc.addImage(
-        logoDataUrl,
-        imageFormat,
-        col1X +
-          (col1Width - logoWidth) / 2,
-        headerY +
-          (headerHeight - logoHeight) / 2,
-        logoWidth,
-        logoHeight
-      )
+          doc.addImage(
+            logoDataUrl,
+            imageFormat,
+            col1X + (col1Width - logoWidth) / 2,
+            headerY + (headerHeight - logoHeight) / 2,
+            logoWidth,
+            logoHeight
+          )
+        }
+      } catch (err) {
+        console.warn('Gagal memuat logo:', err)
+      }
     }
 
     // =========================================================
-    // JUDUL
+    // JUDUL DOKUMEN
     // =========================================================
-
-    doc.setFont(
-      'helvetica',
-      'bold'
-    )
-
-    doc.setFontSize(14)
+    doc.setFont('helvetica', 'bold')
+    doc.setFontSize(12)
 
     doc.text(
       'ABSENSI KARYAWAN STANDBY / DINAS',
-      col2X +
-        col2Width / 2,
-      headerY +
-        headerHeight / 2 +
-        1,
+      col2X + col2Width / 2,
+      headerY + headerHeight / 2 + 1,
       {
         align: 'center',
         baseline: 'middle',
@@ -2243,76 +2227,48 @@ const exportPDF3 = async (
     // =========================================================
     // INFORMASI DOKUMEN
     // =========================================================
+    const rowHeight = headerHeight / 3
 
-    const rowHeight =
-      headerHeight / 3
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8)
 
     doc.text(
       'No. Form :',
       col3X + 2,
-      headerY +
-        rowHeight / 2 +
-        1
+      headerY + rowHeight / 2 + 1
     )
 
     doc.text(
       'No. Revisi :',
       col3X + 2,
-      headerY +
-        rowHeight +
-        rowHeight / 2 +
-        1
+      headerY + rowHeight + rowHeight / 2 + 1
     )
 
     doc.text(
       'Tgl Berlaku :',
       col3X + 2,
-      headerY +
-        rowHeight * 2 +
-        rowHeight / 2 +
-        1
+      headerY + rowHeight * 2 + rowHeight / 2 + 1
     )
 
     // =========================================================
     // INFORMASI KARYAWAN
     // =========================================================
+    const infoStartY = headerY + headerHeight + 5
 
-    const infoStartY =
-      headerY +
-      headerHeight +
-      4
-
-    const infoColWidth =
-      headerWidth / 2
+    const infoColWidth = headerWidth / 2
 
     const infoCol1X = margin
-
-    const infoCol2X =
-      margin +
-      infoColWidth
+    const infoCol2X = margin + infoColWidth
 
     const infoRowHeight = 5
+    const labelWidth = 28
 
-    const infoLabelGap = 2
-
-    doc.setFont(
-      'helvetica',
-      'normal'
-    )
-
-    doc.setFontSize(9)
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8.5)
 
     // ---------------------------------------------------------
-    // KIRI
+    // Kolom Kiri
     // ---------------------------------------------------------
-
     doc.text(
       'Nama Karyawan',
       infoCol1X,
@@ -2321,51 +2277,37 @@ const exportPDF3 = async (
 
     doc.text(
       ':',
-      infoCol1X +
-        30 +
-        infoLabelGap,
+      infoCol1X + labelWidth,
       infoStartY
     )
 
     doc.text(
-      formData.namaKaryawan,
-      infoCol1X +
-        30 +
-        infoLabelGap +
-        2,
+      formData.namaKaryawan || '-',
+      infoCol1X + labelWidth + 2,
       infoStartY
     )
 
     doc.text(
       'NIP / Jabatan',
       infoCol1X,
-      infoStartY +
-        infoRowHeight
+      infoStartY + infoRowHeight
     )
 
     doc.text(
       ':',
-      infoCol1X +
-        30 +
-        infoLabelGap,
-      infoStartY +
-        infoRowHeight
+      infoCol1X + labelWidth,
+      infoStartY + infoRowHeight
     )
 
     doc.text(
-      formData.nipJabatan,
-      infoCol1X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY +
-        infoRowHeight
+      formData.nipJabatan || '-',
+      infoCol1X + labelWidth + 2,
+      infoStartY + infoRowHeight
     )
 
     // ---------------------------------------------------------
-    // KANAN
+    // Kolom Kanan
     // ---------------------------------------------------------
-
     doc.text(
       'Bagian / Dept',
       infoCol2X,
@@ -2374,246 +2316,126 @@ const exportPDF3 = async (
 
     doc.text(
       ':',
-      infoCol2X +
-        30 +
-        infoLabelGap,
+      infoCol2X + labelWidth,
       infoStartY
     )
 
     doc.text(
-      formData.bagianDept,
-      infoCol2X +
-        30 +
-        infoLabelGap +
-        2,
+      formData.bagianDept || '-',
+      infoCol2X + labelWidth + 2,
       infoStartY
     )
 
     doc.text(
       'Lokasi Proyek',
       infoCol2X,
-      infoStartY +
-        infoRowHeight
+      infoStartY + infoRowHeight
     )
 
     doc.text(
       ':',
-      infoCol2X +
-        30 +
-        infoLabelGap,
-      infoStartY +
-        infoRowHeight
+      infoCol2X + labelWidth,
+      infoStartY + infoRowHeight
     )
 
     doc.text(
-      formData.lokasiProyek,
-      infoCol2X +
-        30 +
-        infoLabelGap +
-        2,
-      infoStartY +
-        infoRowHeight
+      formData.lokasiProyek || '-',
+      infoCol2X + labelWidth + 2,
+      infoStartY + infoRowHeight
     )
-
-    // =========================================================
-    // CACHE ALAMAT
-    // =========================================================
-
-    const addressCache =
-      new Map<string, string>()
-
-    // =========================================================
-    // REVERSE GEOCODING
-    // =========================================================
-
-    for (
-      const item of filteredAttendances
-    ) {
-      const addressCoordinates = [
-        [
-          item.latitude_in,
-          item.longitude_in,
-        ],
-        [
-          item.latitude_out,
-          item.longitude_out,
-        ],
-      ] as const
-
-      for (
-        const [
-          latitude,
-          longitude,
-        ] of addressCoordinates
-      ) {
-        const coordinates =
-          getCoordinates(
-            latitude,
-            longitude
-          )
-
-        if (!coordinates) {
-          continue
-        }
-
-        const key =
-          `${coordinates.latitude},${coordinates.longitude}`
-
-        if (
-          addressCache.has(key)
-        ) {
-          continue
-        }
-
-        try {
-          const address =
-            await reverseGeocode(
-              coordinates.latitude,
-              coordinates.longitude
-            )
-
-          addressCache.set(
-            key,
-            address ||
-              formatLocation(
-                latitude,
-                longitude
-              )
-          )
-        } catch (error) {
-          console.error(
-            'Gagal mengambil alamat:',
-            latitude,
-            longitude,
-            error
-          )
-
-          addressCache.set(
-            key,
-            formatLocation(
-              latitude,
-              longitude
-            )
-          )
-        }
-      }
-    }
 
     // =========================================================
     // FORMAT TANGGAL
     // =========================================================
-
-    const formatTanggalPDF = (
-      value: any
-    ) => {
+    const formatTanggalPDF = (value: any) => {
       if (!value) return '-'
 
       try {
-        return formatDate(value)
+        return typeof formatDate === 'function'
+          ? formatDate(value)
+          : String(value)
       } catch {
         return String(value)
       }
     }
 
     // =========================================================
-    // DATA ABSENSI
+    // PREPARE DATA TABEL
+    //
+    // TIDAK ADA REVERSE GEOCODING LAGI.
+    // Alamat langsung menggunakan:
+    //   item.address_in
+    //   item.address_out
     // =========================================================
+    console.time('PDF3 - PREPARE DATA')
 
-    const attendanceDetails =
-      filteredAttendances.map((item) => {
+    const tableBody = filteredAttendances.map((item) => {
+      // -------------------------------------------------------
+      // Lokasi Masuk
+      // -------------------------------------------------------
+      const addressIn =
+        item.address_in
+          ? String(item.address_in)
+          : (
+              item.latitude_in !== null &&
+              item.latitude_in !== undefined &&
+              item.longitude_in !== null &&
+              item.longitude_in !== undefined
+            )
+              ? formatLocation(
+                  item.latitude_in,
+                  item.longitude_in
+                )
+              : '-'
 
-        const coordinatesIn =
-          getCoordinates(
-            item.latitude_in,
-            item.longitude_in
-          )
+      // -------------------------------------------------------
+      // Lokasi Pulang
+      // -------------------------------------------------------
+      const addressOut =
+        item.address_out
+          ? String(item.address_out)
+          : (
+              item.latitude_out !== null &&
+              item.latitude_out !== undefined &&
+              item.longitude_out !== null &&
+              item.longitude_out !== undefined
+            )
+              ? formatLocation(
+                  item.latitude_out,
+                  item.longitude_out
+                )
+              : '-'
 
-        const coordinatesOut =
-          getCoordinates(
-            item.latitude_out,
-            item.longitude_out
-          )
+      return [
+        formatTanggalPDF(item.date),
+        item.clock_in || '-',
+        addressIn,
+        item.clock_out || '-',
+        addressOut,
+      ]
+    })
 
-        const addressIn =
-          coordinatesIn
-            ? addressCache.get(
-                `${coordinatesIn.latitude},${coordinatesIn.longitude}`
-              ) ||
-              formatLocation(
-                item.latitude_in,
-                item.longitude_in
-              )
-            : '-'
-
-        const addressOut =
-          coordinatesOut
-            ? addressCache.get(
-                `${coordinatesOut.latitude},${coordinatesOut.longitude}`
-              ) ||
-              formatLocation(
-                item.latitude_out,
-                item.longitude_out
-              )
-            : '-'
-
-        return {
-          date:
-            formatTanggalPDF(
-              item.date
-            ),
-
-          clockIn:
-            item.clock_in || '-',
-
-          clockOut:
-            item.clock_out || '-',
-
-          addressIn,
-          addressOut,
-        }
-      })
-
-    // =========================================================
-    // DATA TABEL
-    // =========================================================
-
-    const tableBody =
-      attendanceDetails.map(
-        (item) => [
-          '',
-          '',
-          '',
-          '',
-          '',
-        ]
-      )
+    console.timeEnd('PDF3 - PREPARE DATA')
 
     // =========================================================
-    // POSISI TABEL
+    // GENERATE AUTOTABLE
     // =========================================================
-
     const tableStartY =
       infoStartY +
-      infoRowHeight * 2 -
+      infoRowHeight * 2 +
       3
 
-    // =========================================================
-    // TABEL REKAP BULANAN
-    // =========================================================
+    console.time('PDF3 - AUTOTABLE')
 
     autoTable(doc, {
       startY: tableStartY,
-
-      // =======================================================
-      // HEADER
-      // =======================================================
 
       head: [[
         'Tanggal',
         'Masuk',
         'Lokasi Masuk',
         'Pulang',
-        'Lokasi Pulang',
+        'Lokasi Pulang'
       ]],
 
       body: tableBody,
@@ -2625,310 +2447,107 @@ const exportPDF3 = async (
       margin: {
         left: margin,
         right: margin,
+        top: 15,
         bottom: 15,
       },
-
-      // =======================================================
-      // STYLE UMUM
-      // =======================================================
 
       styles: {
         font: 'helvetica',
         fontStyle: 'normal',
-        fontSize: 6.5,
-
+        fontSize: 7,
         textColor: [0, 0, 0],
-
         fillColor: [255, 255, 255],
-
-        cellPadding: 1,
-
+        cellPadding: 1.5,
         valign: 'middle',
-        halign: 'center',
-
         overflow: 'linebreak',
-
-        lineWidth: 0.3,
+        lineWidth: 0.2,
         lineColor: [0, 0, 0],
       },
-
-      // =======================================================
-      // HEADER STYLE
-      // =======================================================
 
       headStyles: {
         font: 'helvetica',
         fontStyle: 'bold',
-        fontSize: 7,
-
+        fontSize: 7.5,
         textColor: [0, 0, 0],
-
-        fillColor: [255, 255, 255],
-
-        cellPadding: 1,
-
+        fillColor: [240, 240, 240],
+        cellPadding: 2,
         halign: 'center',
         valign: 'middle',
-
-        lineWidth: 0.3,
+        lineWidth: 0.2,
         lineColor: [0, 0, 0],
       },
 
-      // =======================================================
-      // LEBAR KOLOM
-      // =======================================================
-
       columnStyles: {
-
         // Tanggal
         0: {
-          cellWidth: 27,
+          cellWidth: 25,
           halign: 'center',
-          valign: 'middle',
         },
 
         // Masuk
         1: {
-          cellWidth: 22,
+          cellWidth: 18,
           halign: 'center',
-          valign: 'middle',
+          fontStyle: 'bold',
         },
 
         // Lokasi Masuk
         2: {
-          cellWidth: 56,
+          cellWidth: 64,
           halign: 'left',
-          valign: 'middle',
         },
 
         // Pulang
         3: {
-          cellWidth: 22,
+          cellWidth: 18,
           halign: 'center',
-          valign: 'middle',
+          fontStyle: 'bold',
         },
 
         // Lokasi Pulang
         4: {
-          cellWidth: 56,
+          cellWidth: 64,
           halign: 'left',
-          valign: 'middle',
         },
       },
 
       // =======================================================
-      // TINGGI BARIS
+      // FOOTER SETIAP HALAMAN
       // =======================================================
+      didDrawPage: (data) => {
+        const totalPages =
+          (doc.internal as any).getNumberOfPages()
 
-      didParseCell: (data) => {
-        if (data.section === 'body') {
-          data.cell.styles.minCellHeight = 5.5
-          data.cell.styles.cellPadding = 0.5
-        }
+        const currentPage =
+          data.pageNumber
 
-        if (data.section === 'head') {
-          data.cell.styles.cellPadding = 0.8
-        }
-      },
-
-      // =======================================================
-      // ISI CELL
-      // =======================================================
-
-      didDrawCell: (data) => {
-
-        if (
-          data.section !== 'body'
-        ) {
-          return
-        }
-
-        const item =
-          attendanceDetails[
-            data.row.index
-          ]
-
-        if (!item) {
-          return
-        }
-
-        const cellX =
-          data.cell.x
-
-        const cellY =
-          data.cell.y
-
-        const cellWidth =
-          data.cell.width
-
-        // =====================================================
-        // TANGGAL
-        // =====================================================
-
-        if (
-          data.column.index === 0
-        ) {
-          doc.setFont(
-            'helvetica',
-            'normal'
-          )
-
-          doc.setFontSize(6.5)
-
-          doc.text(
-            item.date,
-            cellX +
-              cellWidth / 2,
-            cellY +
-              data.cell.height / 2 +
-              2,
-            {
-              align: 'center',
-            }
-          )
-
-          return
-        }
-
-        // =====================================================
-        // MASUK
-        // =====================================================
-
-        if (data.column.index === 1) {
-          doc.setFont('helvetica', 'bold')
-          doc.setFontSize(6.5)
-
-          doc.text(
-            item.clockIn,
-            cellX + cellWidth / 2,
-            cellY + data.cell.height / 2 + 1.5,
-            {
-              align: 'center',
-            }
-          )
-
-          return
-        }
-
-        // =====================================================
-        // LOKASI MASUK
-        // =====================================================
-
-        if (
-          data.column.index === 2
-        ) {
-          doc.setFont(
-            'helvetica',
-            'normal'
-          )
-
-          doc.setFontSize(5.5)
-
-          const locationLines =
-            doc.splitTextToSize(
-              item.addressIn,
-              cellWidth - 3
-            )
-
-          doc.text(
-            locationLines,
-            cellX + 1.5,
-            cellY +
-              data.cell.height / 2 +
-              1,
-            {
-              align: 'left',
-              maxWidth:
-                cellWidth - 3,
-              lineHeightFactor: 0.9,
-            }
-          )
-
-          return
-        }
-
-        // =====================================================
-        // PULANG
-        // =====================================================
-
-        if (data.column.index === 3) {
-          doc.setFont('helvetica', 'bold')
-          doc.setFontSize(6.5)
-
-          doc.text(
-            item.clockOut,
-            cellX + cellWidth / 2,
-            cellY + data.cell.height / 2 + 1.5,
-            {
-              align: 'center',
-            }
-          )
-
-          return
-        }
-
-          
-        // =====================================================
-        // LOKASI PULANG
-        // =====================================================
-
-        if (
-          data.column.index === 4
-        ) {
-          doc.setFont(
-            'helvetica',
-            'normal'
-          )
-
-          doc.setFontSize(5.5)
-
-          const locationLines =
-            doc.splitTextToSize(
-              item.addressOut,
-              cellWidth - 3
-            )
-
-          doc.text(
-            locationLines,
-            cellX + 1.5,
-            cellY +
-              data.cell.height / 2 +
-              1,
-            {
-              align: 'left',
-              maxWidth:
-                cellWidth - 3,
-              lineHeightFactor: 0.9,
-            }
-          )
-        }
-      },
-
-      // =======================================================
-      // FOOTER
-      // =======================================================
-
-      didDrawPage: () => {
-
-        doc.setFont(
-          'helvetica',
-          'normal'
-        )
-
+        doc.setFont('helvetica', 'normal')
         doc.setFontSize(7)
 
+        // Kiri Footer
         doc.text(
           'Minera ClockIn',
           margin,
           pageHeight - 8
         )
+
+        // Kanan Footer
+        doc.text(
+          `Halaman ${currentPage} dari ${totalPages}`,
+          pageWidth - margin,
+          pageHeight - 8,
+          {
+            align: 'right',
+          }
+        )
       },
     })
 
-    // =========================================================
-    // SIMPAN
-    // =========================================================
+    console.timeEnd('PDF3 - AUTOTABLE')
 
+    // =========================================================
+    // SIMPAN PDF
+    // =========================================================
     const filename =
       `Absensi-Rekap-${new Date()
         .toISOString()
@@ -2936,15 +2555,13 @@ const exportPDF3 = async (
 
     doc.save(filename)
 
-  } catch (error) {
+    console.timeEnd('TOTAL EXPORT PDF3')
 
-    console.error(
-      'Export PDF3 error:',
-      error
-    )
+  } catch (error) {
+    console.error('Export PDF3 error:', error)
 
     alert(
-      'Gagal membuat PDF. Pastikan data absensi dan alamat lokasi dapat diakses oleh browser.'
+      'Gagal membuat PDF. Pastikan data absensi dan alamat lokasi tersedia.'
     )
   }
 }
